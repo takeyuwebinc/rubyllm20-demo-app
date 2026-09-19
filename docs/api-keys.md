@@ -110,6 +110,20 @@ GOOGLE_CLOUD_LOCATION=global
 - RubyLLM は ADC の代わりにサービスアカウントキーも受け付けるが、`vertexai_service_account_key` に渡すのは**ファイルパスではなく JSON 文字列そのもの**。`.env` に複数行の JSON を置くのは扱いにくいため、このアプリは ADC のみを配線している。
 - Vertex AI の認証には `googleauth` gem が必要（Gemfile に追加済み）。
 
+### Deep Research のクォータ
+
+チャットが通っても、Deep Research のジョブを投入できるとは限らない。2026-09-19 に実際のジョブを投入したところ、間隔を 90 秒以上空けた再試行を含む 3 回とも、次のエラーで拒否された。ジョブは作成されず、費用も発生していない。
+
+```
+RubyLLM::RateLimitError: Quota exceeded for quota metric
+'aiplatform.googleapis.com/stateful_interaction_creations' and limit
+'Stateful Interaction Creation requests per minute per project.'
+```
+
+間隔を空けても毎分のクォータを超過するため、このプロジェクトの上限が 0 である可能性が高い。上限値は未確認である。値を読むには `gcloud beta` の導入か、Cloud Quotas API の有効化が必要になる。
+
+対処は、Google Cloud コンソールの「IAM と管理」→「割り当てとシステム上限」で、サービスを Vertex AI に絞り、`Stateful Interaction Creation requests per minute per project` の値を確認して、引き上げを申請する。
+
 ## 疎通確認
 
 ```sh
@@ -126,7 +140,7 @@ Vertex AI  SKIP  GOOGLE_CLOUD_PROJECT が未設定
 ```
 
 - `SKIP` は未設定を示すだけで失敗ではない。終了コードは、`NG` が 1 つでもあれば 1、それ以外は 0。
-- Vertex AI の行が確認するのは「ADC・プロジェクト・API の有効化」まで。Deep Research エージェント自体を使えるかは、Deep Research デモの初回実行で確認する。
+- Vertex AI の行が確認するのは「ADC・プロジェクト・API の有効化」まで。Deep Research のジョブを投入できるかは別で、上の「Deep Research のクォータ」を参照する。
 
 `NG` のときの原因:
 
@@ -152,14 +166,16 @@ Vertex AI  SKIP  GOOGLE_CLOUD_PROJECT が未設定
 - 各プロバイダーのキー発行ページ・Billing ページの URL（Anthropic と xAI は公式ドキュメント、OpenAI は API のエラーメッセージに記載された URL）
 - RubyLLM が読む設定名と、Vertex AI の認証方式・`global` 制約・`googleauth` 依存（gem 2.0.0 のソース）
 - Deep Research の前提条件、Preview 扱い、エージェント ID（Google Cloud のドキュメント）
-- `bin/check_keys` の SKIP 経路と、無効なキーでの NG 経路（実リクエスト）
+- `bin/check_keys` の SKIP 経路、無効なキーでの NG 経路、有効な認証情報での OK 経路（4 プロバイダーとも、2026-09-19 に実リクエストで確認）。上の出力例のトークン数は例示
+- 失効した ADC では Vertex AI が `UnauthorizedError` になり、`gcloud auth application-default login` で解消すること（実リクエスト）
+- Deep Research のリクエストを受けるサービスが `aiplatform.googleapis.com` であること（クォータ超過のエラーメッセージに記載）
+- Deep Research のジョブの投入が、このプロジェクトではクォータの超過として拒否されること（実リクエスト）
 - RubyLLM 2.0.0 が Rails 8.1.3.1 / Ruby 4.0.6 で起動すること
 
 確認できていないもの:
 
 - 各コンソールのログイン後の画面遷移（ボタン名やメニュー位置）。ログインが必要なため未確認。
-- 有効なキーでの `OK` 経路と、Vertex AI の経路。この環境に有効な認証情報がないため未実行。上の出力例のトークン数は例示。
-- `aiplatform.googleapis.com` が「Agent Platform API」のサービス名であること。ドキュメント上の名称と IAM ロール名からの推定。有効化に失敗した場合は、Deep Research ドキュメントの有効化リンクから行う。
+- Deep Research のクォータの上限値と、引き上げの申請が通るかどうか。
 - OpenAI の Organization 本人確認が必要になるモデルの範囲。
 
 ## 参照
