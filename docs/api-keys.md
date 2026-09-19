@@ -1,6 +1,6 @@
 # API キー取得ガイド
 
-このデモアプリが使う 4 プロバイダーの認証情報を取得し、`.env` に置いて疎通確認するまでの手順。
+このデモアプリが使う 4 プロバイダーの認証情報と Sentry の DSN を取得し、`.env` に置いて疎通確認するまでの手順。
 
 - 最終確認日: 2026-09-19（RubyLLM 2.0.0）
 - 検証できた範囲とできていない範囲は、末尾の「このガイドの検証範囲」に分けて記載した。
@@ -9,8 +9,9 @@
 
 全部を一度に揃える必要はない。RubyLLM は未設定のプロバイダーを実際に使った時点で初めて `RubyLLM::ConfigurationError` を出すため、キーがないデモだけが失敗する。実装フェーズ順に取得すればよい。
 
-| 取得順 | プロバイダー | `.env` の変数 | 使うデモ |
+| 取得順 | サービス | `.env` の変数 | 使うデモ |
 |---|---|---|---|
+| 0 | Sentry | `SENTRY_DSN` | 全デモ。試行ごとの観察情報を確認する（エージェントトレーシング） |
 | 1 | OpenAI | `OPENAI_API_KEY` | Responses API / Tool Approval / Batches / Model Fallbacks（主系）/ Speech / Provider Tools / `count_tokens` / Workflow Instrumentation |
 | 2 | Anthropic | `ANTHROPIC_API_KEY` | Citations / Model Fallbacks（切替先） |
 | 3 | xAI | `XAI_API_KEY` | Video Generation / `RubyLLM.tokenize` |
@@ -124,6 +125,23 @@ RubyLLM::RateLimitError: Quota exceeded for quota metric
 
 対処は、Google Cloud コンソールの「IAM と管理」→「割り当てとシステム上限」で、サービスを Vertex AI に絞り、`Stateful Interaction Creation requests per minute per project` の値を確認して、引き上げを申請する。
 
+## 5. Sentry（観察情報用）
+
+観察情報（試行ごとのプロバイダー、モデル、トークン数、コスト、所要時間、送信先）と、プロンプトと応答の本文は、Sentry のエージェントトレーシングで確認する。モデルのプロバイダーではないが、全デモが使うため最初に用意する。既存の sentry.io の組織を使う。
+
+1. sentry.io の組織で、プロジェクトを新規作成する。プラットフォームは Rails を選ぶ。
+2. 作成直後の画面に表示される DSN を控える。後から確認する場合は、プロジェクトの設定の Client Keys (DSN) にある。
+3. `.env` の `SENTRY_DSN=` に貼り付ける。
+
+注意点:
+
+- Sentry の Ruby SDK は、`config.dsn` を設定しない場合に `SENTRY_DSN` 環境変数を読む。変数が空なら、SDK は何も送信しない。
+- エージェントトレーシングはトレーシングが前提になる。このアプリは全トランザクションを送る設定（`traces_sample_rate = 1.0`）にする。
+- Ruby SDK のエージェントトレーシングは手動の計装で、RubyLLM 用の自動計装はない。このアプリは RubyLLM の計装イベントから Sentry のスパンを作る。
+- DSN は送信先を示す値で、API キーほどの権限は持たないが、`.env` に置いてコミットしない。
+- **プロンプトと応答の本文が Sentry に送られる。代表シナリオの入力に、実データや個人情報を入力しない。**
+- Sentry が独自に推定するコストは、未知のモデル、バッチ料金、トークン課金以外の料金を対象としない。このアプリは RubyLLM が算出したコストを Sentry に送る。
+
 ## 疎通確認
 
 ```sh
@@ -166,6 +184,7 @@ Vertex AI  SKIP  GOOGLE_CLOUD_PROJECT が未設定
 - 各プロバイダーのキー発行ページ・Billing ページの URL（Anthropic と xAI は公式ドキュメント、OpenAI は API のエラーメッセージに記載された URL）
 - RubyLLM が読む設定名と、Vertex AI の認証方式・`global` 制約・`googleauth` 依存（gem 2.0.0 のソース）
 - Deep Research の前提条件、Preview 扱い、エージェント ID（Google Cloud のドキュメント）
+- Sentry の Ruby SDK が `SENTRY_DSN` を読むこと、エージェントトレーシングが手動の計装であること、コスト推定の対象外（Sentry のドキュメント）
 - `bin/check_keys` の SKIP 経路、無効なキーでの NG 経路、有効な認証情報での OK 経路（4 プロバイダーとも、2026-09-19 に実リクエストで確認）。上の出力例のトークン数は例示
 - 失効した ADC では Vertex AI が `UnauthorizedError` になり、`gcloud auth application-default login` で解消すること（実リクエスト）
 - Deep Research のリクエストを受けるサービスが `aiplatform.googleapis.com` であること（クォータ超過のエラーメッセージに記載）
@@ -176,6 +195,8 @@ Vertex AI  SKIP  GOOGLE_CLOUD_PROJECT が未設定
 
 - 各コンソールのログイン後の画面遷移（ボタン名やメニュー位置）。ログインが必要なため未確認。
 - Deep Research のクォータの上限値と、引き上げの申請が通るかどうか。
+- Sentry への実際の送信と、エージェントトレーシングの画面での表示。計装の実装後に確認する。
+- 既存の Sentry 組織のプランで、エージェントトレーシングの画面を使えるかどうか。取得したドキュメントにプランの条件の記載がなかった。
 - OpenAI の Organization 本人確認が必要になるモデルの範囲。
 
 ## 参照
