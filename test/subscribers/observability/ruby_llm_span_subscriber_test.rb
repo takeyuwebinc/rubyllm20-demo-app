@@ -1,0 +1,262 @@
+require "test_helper"
+
+module Observability
+  class RubyLLMSpanSubscriberTest < ActiveSupport::TestCase
+    FakeMessage = Struct.new(:role, :content, :tool_calls, :tool_call_id, :thinking, :finish_reason, :model, keyword_init: true)
+    FakeToolCall = Struct.new(:id, :name, :arguments, keyword_init: true)
+    FakeThinking = Struct.new(:text, keyword_init: true)
+
+    setup do
+      @exporter = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
+      @provider = OpenTelemetry::SDK::Trace::TracerProvider.new
+      @provider.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(@exporter))
+      subscriber = RubyLLMSpanSubscriber.new(tracer: @provider.tracer("test"), capture_content: true)
+      @subscription = ActiveSupport::Notifications.subscribe(/\.ruby_llm\z/, subscriber)
+    end
+
+    teardown do
+      ActiveSupport::Notifications.unsubscribe(@subscription)
+      @provider.shutdown
+    end
+
+    test "nests chat and request spans under the workflow as one agent run" do
+      instrument("workflow.ruby_llm", workflow_name: "Summarize ticket", workflow_id: "run-1") do
+        instrument("workflow_step.ruby_llm", workflow_step_name: "Classify") do
+          instrument("chat.ruby_llm", chat_payload) do |payload|
+            instrument("request.ruby_llm", provider: "openai", method: :post, url: "responses") { |p| p[:status] = 200 }
+            complete(payload)
+          end
+        end
+      end
+
+      workflow, step, chat, request = spans_named("invoke_agent Summarize ticket", "Classify", "chat gpt-5-nano", "POST responses")
+
+      assert_equal "gen_ai.invoke_agent", workflow.attributes["sentry.op"]
+      assert_equal "Summarize ticket", workflow.attributes["gen_ai.agent.name"]
+      assert_equal workflow.span_id, step.parent_span_id
+      assert_equal step.span_id, chat.parent_span_id
+      assert_equal chat.span_id, request.parent_span_id
+      assert_equal [ workflow.trace_id ], [ step, chat, request ].map(&:trace_id).uniq
+    end
+
+    test "describes the chat call with GenAI attributes" do
+      instrument("chat.ruby_llm", chat_payload(temperature: 0.2, max_output_tokens: 300)) { |payload| complete(payload) }
+
+      attributes = span("chat gpt-5-nano").attributes
+
+      assert_equal "gen_ai.chat", attributes["sentry.op"]
+      assert_equal "chat", attributes["gen_ai.operation.name"]
+      assert_equal "openai", attributes["gen_ai.provider.name"]
+      assert_equal "gpt-5-nano", attributes["gen_ai.request.model"]
+      assert_equal "gpt-5-nano-2025-08-07", attributes["gen_ai.response.model"]
+      assert_in_delta 0.2, attributes["gen_ai.request.temperature"]
+      assert_equal 300, attributes["gen_ai.request.max_tokens"]
+      assert_equal '["stop"]', attributes["gen_ai.response.finish_reasons"]
+    end
+
+    test "reports input tokens as a total that includes cache reads and writes" do
+      tokens = RubyLLM::Tokens.new(input: 100, output: 50, cache_read: 900, cache_write: 20, thinking: 30)
+
+      instrument("chat.ruby_llm", chat_payload) { |payload| complete(payload, tokens: tokens) }
+
+      attributes = span("chat gpt-5-nano").attributes
+
+      assert_equal 1020, attributes["gen_ai.usage.input_tokens"]
+      assert_equal 900, attributes["gen_ai.usage.cache_read.input_tokens"]
+      assert_equal 20, attributes["gen_ai.usage.cache_creation.input_tokens"]
+      assert_equal 50, attributes["gen_ai.usage.output_tokens"]
+      assert_equal 30, attributes["gen_ai.usage.reasoning.output_tokens"]
+      assert_equal 1070, attributes["gen_ai.usage.total_tokens"]
+    end
+
+    test "omits a reasoning count that exceeds the output total" do
+      tokens = RubyLLM::Tokens.new(input: 10, output: 5, thinking: 40)
+
+      instrument("chat.ruby_llm", chat_payload) { |payload| complete(payload, tokens: tokens) }
+
+      assert_not_includes span("chat gpt-5-nano").attributes.keys, "gen_ai.usage.reasoning.output_tokens"
+    end
+
+    test "sends the cost RubyLLM calculated, and nothing when it is unknown" do
+      instrument("chat.ruby_llm", chat_payload) { |payload| complete(payload, cost: 0.00042) }
+      instrument("chat.ruby_llm", chat_payload(model: "unpriced")) { |payload| complete(payload, cost: nil) }
+
+      assert_in_delta 0.00042, span("chat gpt-5-nano").attributes["gen_ai.cost.total_tokens"]
+      assert_not_includes span("chat unpriced").attributes.keys, "gen_ai.cost.total_tokens"
+    end
+
+    test "captures the conversation as role and parts messages" do
+      history = [
+        FakeMessage.new(role: :system, content: "You are a support agent."),
+        FakeMessage.new(role: :user, content: "Where is my order?"),
+        FakeMessage.new(role: :assistant, content: nil, tool_calls: { "call_1" => FakeToolCall.new(id: "call_1", name: "find_order", arguments: { "id" => 42 }) }),
+        FakeMessage.new(role: :tool, content: "shipped", tool_call_id: "call_1")
+      ]
+      answer = FakeMessage.new(role: :assistant, content: "It shipped.", thinking: FakeThinking.new(text: "Look up the order."), finish_reason: :stop, model: "gpt-5-nano")
+
+      instrument("chat.ruby_llm", chat_payload(input_messages: history)) { |payload| complete(payload, response: answer) }
+
+      attributes = span("chat gpt-5-nano").attributes
+      input = JSON.parse(attributes["gen_ai.input.messages"])
+      output = JSON.parse(attributes["gen_ai.output.messages"])
+
+      assert_equal "You are a support agent.", attributes["gen_ai.system_instructions"]
+      assert_equal %w[user assistant tool], input.map { |message| message["role"] }
+      assert_equal({ "type" => "tool_call", "id" => "call_1", "name" => "find_order", "arguments" => { "id" => 42 } }, input[1]["parts"].first)
+      assert_equal({ "type" => "tool_call_response", "id" => "call_1", "result" => "shipped" }, input[2]["parts"].first)
+      assert_equal [ { "type" => "reasoning", "content" => "Look up the order." }, { "type" => "text", "content" => "It shipped." } ], output.first["parts"]
+    end
+
+    test "leaves prompts and responses out when content capture is off" do
+      ActiveSupport::Notifications.unsubscribe(@subscription)
+      subscriber = RubyLLMSpanSubscriber.new(tracer: @provider.tracer("test"), capture_content: false)
+      @subscription = ActiveSupport::Notifications.subscribe(/\.ruby_llm\z/, subscriber)
+
+      instrument("chat.ruby_llm", chat_payload) { |payload| complete(payload) }
+
+      keys = span("chat gpt-5-nano").attributes.keys
+      assert_empty keys.grep(/messages|system_instructions/)
+      assert_includes keys, "gen_ai.usage.input_tokens"
+    end
+
+    test "groups spans into a conversation from workflow metadata" do
+      metadata = { conversation_id: "chat/42 (draft)" }
+
+      instrument("workflow.ruby_llm", workflow_name: "Reply", workflow_id: "run-2", workflow_metadata: metadata) do
+        instrument("chat.ruby_llm", chat_payload(workflow_name: "Reply", workflow_metadata: metadata)) { |payload| complete(payload) }
+      end
+
+      workflow, chat = spans_named("invoke_agent Reply", "chat gpt-5-nano")
+
+      assert_equal "chat_42__draft_", workflow.attributes["gen_ai.conversation.id"]
+      assert_equal "chat_42__draft_", chat.attributes["gen_ai.conversation.id"]
+      assert_equal "Reply", chat.attributes["gen_ai.agent.name"]
+    end
+
+    test "records a tool execution with its arguments and result" do
+      payload = { provider: "openai", model: "gpt-5-nano", tool_name: "issue_refund", tool_call_id: "call_9", tool_arguments: { "order_id" => 42 } }
+
+      instrument("tool_call.ruby_llm", payload) { |event| event[:result_content] = "Refunded order 42" }
+
+      attributes = span("execute_tool issue_refund").attributes
+
+      assert_equal "gen_ai.execute_tool", attributes["sentry.op"]
+      assert_equal "issue_refund", attributes["gen_ai.tool.name"]
+      assert_equal '{"order_id":42}', attributes["gen_ai.tool.call.arguments"]
+      assert_equal "Refunded order 42", attributes["gen_ai.tool.call.result"]
+    end
+
+    test "shows the destination of each provider request" do
+      instrument("request.ruby_llm", provider: "openai", method: :post, url: "responses") { |payload| payload[:status] = 200 }
+
+      request = span("POST responses")
+
+      assert_equal :client, request.kind
+      assert_equal "http.client", request.attributes["sentry.op"]
+      assert_equal "openai", request.attributes["ruby_llm.request.provider"]
+      assert_equal "responses", request.attributes["url.path"]
+      assert_equal 200, request.attributes["http.response.status_code"]
+    end
+
+    test "records every physical attempt, including failed ones" do
+      tokens = RubyLLM::Tokens.new(input: 12, output: 0)
+
+      instrument("usage.ruby_llm", operation: :chat, provider: "openai", model: "gpt-5-nano", status: :failed, tokens: tokens, cost: FakeCost.new(nil))
+
+      attributes = span("attempt chat gpt-5-nano").attributes
+
+      assert_equal "failed", attributes["ruby_llm.attempt.status"]
+      assert_equal 12, attributes["ruby_llm.attempt.input_tokens"]
+      assert_empty attributes.keys.grep(/\Agen_ai\.usage/), "attempt spans must not be double counted with the chat span"
+    end
+
+    test "marks the span as failed and keeps the error as attributes" do
+      assert_raises(RubyLLM::RateLimitError) do
+        instrument("chat.ruby_llm", chat_payload) { raise RubyLLM::RateLimitError.new("slow down") }
+      end
+
+      chat = span("chat gpt-5-nano")
+
+      assert_equal OpenTelemetry::Trace::Status::ERROR, chat.status.code
+      assert_equal "RubyLLM::RateLimitError", chat.attributes["error.type"]
+      assert_equal "slow down", chat.attributes["error.message"]
+    end
+
+    test "traces other model operations with their usage" do
+      payload = { provider: "openai", model: "gpt-4o-mini-tts", tokens: RubyLLM::Tokens.new(input: 9), cost: FakeCost.new(0.001) }
+
+      instrument("speech.ruby_llm", payload)
+
+      attributes = span("generate_content gpt-4o-mini-tts").attributes
+
+      assert_equal "gen_ai.generate_content", attributes["sentry.op"]
+      assert_equal "speech", attributes["ruby_llm.operation"]
+      assert_equal 9, attributes["gen_ai.usage.input_tokens"]
+    end
+
+    test "ignores events that are not model work" do
+      instrument("models.refresh.ruby_llm", remote_only: true)
+
+      assert_empty @exporter.finished_spans
+    end
+
+    test "keeps its open spans apart from another subscriber's" do
+      # Two subscribers attach and detach OpenTelemetry contexts in the same
+      # order, which OpenTelemetry reports as mismatched. It still unwinds the
+      # context correctly, and the app only ever registers one subscriber.
+      original_logger, OpenTelemetry.logger = OpenTelemetry.logger, Logger.new(IO::NULL)
+      other_exporter = OpenTelemetry::SDK::Trace::Export::InMemorySpanExporter.new
+      other_provider = OpenTelemetry::SDK::Trace::TracerProvider.new
+      other_provider.add_span_processor(OpenTelemetry::SDK::Trace::Export::SimpleSpanProcessor.new(other_exporter))
+      other = ActiveSupport::Notifications.subscribe(/\.ruby_llm\z/, RubyLLMSpanSubscriber.new(tracer: other_provider.tracer("other"), capture_content: false))
+
+      instrument("chat.ruby_llm", chat_payload) { |payload| complete(payload) }
+
+      assert_includes span("chat gpt-5-nano").attributes.keys, "gen_ai.input.messages"
+      assert_not_includes other_exporter.finished_spans.sole.attributes.keys, "gen_ai.input.messages"
+    ensure
+      ActiveSupport::Notifications.unsubscribe(other)
+      other_provider.shutdown
+      OpenTelemetry.logger = original_logger
+    end
+
+    test "never lets an instrumentation failure break the model call" do
+      broken = Object.new
+      def broken.start_span(*, **) = raise("tracer exploded")
+      ActiveSupport::Notifications.unsubscribe(@subscription)
+      @subscription = ActiveSupport::Notifications.subscribe(/\.ruby_llm\z/, RubyLLMSpanSubscriber.new(tracer: broken, capture_content: true))
+
+      result = instrument("chat.ruby_llm", chat_payload) { :answer }
+
+      assert_equal :answer, result
+    end
+
+    private
+
+    FakeCost = Struct.new(:total)
+
+    def instrument(name, payload = {}, &block)
+      ActiveSupport::Notifications.instrument(name, payload, &block)
+    end
+
+    def chat_payload(**overrides)
+      {
+        provider: "openai", model: "gpt-5-nano", streaming: false,
+        input_messages: [ FakeMessage.new(role: :user, content: "ping") ]
+      }.merge(overrides)
+    end
+
+    def complete(payload, tokens: RubyLLM::Tokens.new(input: 13, output: 75), cost: 0.00003, response: nil)
+      payload[:response] = response || FakeMessage.new(role: :assistant, content: "pong", finish_reason: :stop, model: "gpt-5-nano")
+      payload[:response_model] = "gpt-5-nano-2025-08-07"
+      payload[:tokens] = tokens
+      payload[:cost] = FakeCost.new(cost)
+    end
+
+    def span(name)
+      @exporter.finished_spans.find { |finished| finished.name == name } || flunk("no span named #{name.inspect}; got #{@exporter.finished_spans.map(&:name).inspect}")
+    end
+
+    def spans_named(*names) = names.map { |name| span(name) }
+  end
+end

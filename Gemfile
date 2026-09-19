@@ -45,6 +45,14 @@ gem "ruby_llm", "2.0.0"
 # Required by RubyLLM for Vertex AI authentication (Deep Research demo)
 gem "googleauth", "~> 1.15"
 
+# Error monitoring, and the OTLP bridge that ships OpenTelemetry traces to Sentry [https://docs.sentry.io/platforms/ruby/guides/rails/integrations/otlp/]
+gem "sentry-ruby", "~> 7.0"
+gem "sentry-rails", "~> 7.0"
+gem "sentry-opentelemetry", "~> 7.0"
+# Tracing itself is OpenTelemetry; spans are built from RubyLLM's instrumentation events
+gem "opentelemetry-sdk", "~> 1.13"
+gem "opentelemetry-exporter-otlp", "~> 0.36"
+
 group :development, :test do
   # Load provider API keys from .env [https://github.com/bkeepers/dotenv]
   gem "dotenv-rails"
