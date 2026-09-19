@@ -136,8 +136,12 @@ RubyLLM::RateLimitError: Quota exceeded for quota metric
 注意点:
 
 - Sentry の Ruby SDK は、`config.dsn` を設定しない場合に `SENTRY_DSN` 環境変数を読む。変数が空なら、SDK は何も送信しない。
-- エージェントトレーシングはトレーシングが前提になる。このアプリは全トランザクションを送る設定（`traces_sample_rate = 1.0`）にする。
-- Ruby SDK のエージェントトレーシングは手動の計装で、RubyLLM 用の自動計装はない。このアプリは RubyLLM の計装イベントから Sentry のスパンを作る。
+- 計装は OpenTelemetry で行い、Sentry の OTLP Integration（`config.otlp.enabled` と `config.otlp.setup_otlp_traces_exporter`）で送る。OTLP の送信先は DSN から自動で決まる。
+- OTLP Integration は Sentry SDK 自身のトレーシングと併用しない。`traces_sample_rate` は設定しない。
+- RubyLLM 2.0.0 に対応した既製の OpenTelemetry 計装はない。このアプリは RubyLLM の計装イベントから OpenTelemetry のスパンを作る。
+  - `ruby_llm-opentelemetry` 0.1.0 は中身のない予告版である。
+  - `opentelemetry-instrumentation-ruby_llm` 0.7.1 は、RubyLLM 2.0.0 でチャットの呼び出しを `NoMethodError` で失敗させる。警告なしでインストールされるため、導入しない。
+- Sentry の OTLP の取り込みは公開ベータである。スパンイベントは取り込み時に破棄される。
 - DSN は送信先を示す値で、API キーほどの権限は持たないが、`.env` に置いてコミットしない。
 - **プロンプトと応答の本文が Sentry に送られる。代表シナリオの入力に、実データや個人情報を入力しない。**
 - Sentry が独自に推定するコストは、未知のモデル、バッチ料金、トークン課金以外の料金を対象としない。このアプリは RubyLLM が算出したコストを Sentry に送る。
@@ -184,7 +188,9 @@ Vertex AI  SKIP  GOOGLE_CLOUD_PROJECT が未設定
 - 各プロバイダーのキー発行ページ・Billing ページの URL（Anthropic と xAI は公式ドキュメント、OpenAI は API のエラーメッセージに記載された URL）
 - RubyLLM が読む設定名と、Vertex AI の認証方式・`global` 制約・`googleauth` 依存（gem 2.0.0 のソース）
 - Deep Research の前提条件、Preview 扱い、エージェント ID（Google Cloud のドキュメント）
-- Sentry の Ruby SDK が `SENTRY_DSN` を読むこと、エージェントトレーシングが手動の計装であること、コスト推定の対象外（Sentry のドキュメント）
+- Sentry の Ruby SDK が `SENTRY_DSN` を読むこと、OTLP Integration の設定項目と `traces_sample_rate` を併用しない決まり、OTLP の取り込みの制限、コスト推定の対象外（Sentry のドキュメント）
+- 既製の OpenTelemetry 計装 gem が 2 つとも使えないこと（gem の中身の確認と、RubyLLM 2.0.0 での実行）
+- RubyLLM の計装イベントから作った OpenTelemetry のスパンを、Sentry が OTLP で受理すること。トレース画面で `gen_ai.invoke_agent`、`gen_ai.chat`、`http.client` の各スパンが親子関係つきで表示され、Agent Activity のタブと、エージェント用のスパン詳細（Agent Name、Input、Output）が出ること（2026-09-19 に実送信し、利用者が Sentry の画面で確認）
 - `bin/check_keys` の SKIP 経路、無効なキーでの NG 経路、有効な認証情報での OK 経路（4 プロバイダーとも、2026-09-19 に実リクエストで確認）。上の出力例のトークン数は例示
 - 失効した ADC では Vertex AI が `UnauthorizedError` になり、`gcloud auth application-default login` で解消すること（実リクエスト）
 - Deep Research のリクエストを受けるサービスが `aiplatform.googleapis.com` であること（クォータ超過のエラーメッセージに記載）
@@ -195,8 +201,8 @@ Vertex AI  SKIP  GOOGLE_CLOUD_PROJECT が未設定
 
 - 各コンソールのログイン後の画面遷移（ボタン名やメニュー位置）。ログインが必要なため未確認。
 - Deep Research のクォータの上限値と、引き上げの申請が通るかどうか。
-- Sentry への実際の送信と、エージェントトレーシングの画面での表示。計装の実装後に確認する。
-- 既存の Sentry 組織のプランで、エージェントトレーシングの画面を使えるかどうか。取得したドキュメントにプランの条件の記載がなかった。
+- `gen_ai.chat` のスパンでの、トークン数と、RubyLLM が算出したコストの表示。計装の実装後に確認する。
+- Agents のダッシュボードの集計に、OTLP で送ったスパンが反映されるかどうか。計装の実装後に確認する。
 - OpenAI の Organization 本人確認が必要になるモデルの範囲。
 
 ## 参照
@@ -208,3 +214,6 @@ Vertex AI  SKIP  GOOGLE_CLOUD_PROJECT が未設定
 - [xAI: Getting started](https://docs.x.ai/docs/tutorial)
 - [Google Cloud: Use Deep Research](https://docs.cloud.google.com/gemini-enterprise-agent-platform/agents/use-deep-research)
 - [OpenAI: Developer quickstart](https://developers.openai.com/api/docs/quickstart)
+- [Sentry: OpenTelemetry (OTLP) for Rails](https://docs.sentry.io/platforms/ruby/guides/rails/integrations/otlp/)
+- [Sentry: Direct OTLP Traces](https://docs.sentry.io/concepts/otlp/direct/traces/)
+- [Sentry: Instrument Agents](https://docs.sentry.io/platforms/ruby/guides/rails/tracing/instrumentation/custom-instrumentation/ai-agents-module/)
