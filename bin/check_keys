@@ -1,0 +1,67 @@
+#!/usr/bin/env ruby
+# Verifies the provider credentials in .env by sending one tiny chat request per
+# provider. A chat (rather than a free endpoint) is used on purpose: it also
+# catches a valid key with no credits, the most common setup failure.
+# Runs without booting Rails. See docs/api-keys.md.
+require "bundler/setup"
+require "dotenv"
+require "ruby_llm"
+
+APP_ROOT = File.expand_path("..", __dir__)
+Dotenv.load(File.join(APP_ROOT, ".env"))
+
+CHECKS = [
+  { name: "OpenAI",    env: "OPENAI_API_KEY",       model: "gpt-5-nano",       provider: :openai },
+  { name: "Anthropic", env: "ANTHROPIC_API_KEY",    model: "claude-haiku-4-5", provider: :anthropic },
+  { name: "xAI",       env: "XAI_API_KEY",          model: "grok-4.3",         provider: :xai },
+  { name: "Vertex AI", env: "GOOGLE_CLOUD_PROJECT", model: "gemini-2.5-flash", provider: :vertexai }
+].freeze
+
+HINTS = {
+  RubyLLM::UnauthorizedError => "キーが無効か失効している。Vertex AI の場合は `gcloud auth application-default login` を実行する",
+  RubyLLM::PaymentRequiredError => "クレジット残高がない。プロバイダーのコンソールで課金設定とチャージを行う",
+  RubyLLM::RateLimitError => "レート制限、または残高不足（OpenAI は残高不足も 429 で返す）。Billing を確認する",
+  RubyLLM::ForbiddenError => "権限不足。モデルへのアクセス権、API の有効化、IAM ロールを確認する",
+  RubyLLM::BadRequestError => "リクエストが拒否された。xAI は無効なキーも 400 で返すため、まずキーを確認する",
+  RubyLLM::ModelNotFoundError => "モデル ID がレジストリにない。このスクリプトの CHECKS を見直す",
+  RubyLLM::ConfigurationError => ".env の値が RubyLLM に渡っていない。変数名を確認する"
+}.freeze
+
+def blank?(value) = value.nil? || value.strip.empty?
+
+RubyLLM.configure do |config|
+  config.openai_api_key = ENV["OPENAI_API_KEY"] unless blank?(ENV["OPENAI_API_KEY"])
+  config.anthropic_api_key = ENV["ANTHROPIC_API_KEY"] unless blank?(ENV["ANTHROPIC_API_KEY"])
+  config.xai_api_key = ENV["XAI_API_KEY"] unless blank?(ENV["XAI_API_KEY"])
+  config.vertexai_project_id = ENV["GOOGLE_CLOUD_PROJECT"] unless blank?(ENV["GOOGLE_CLOUD_PROJECT"])
+  config.vertexai_location = ENV["GOOGLE_CLOUD_LOCATION"] unless blank?(ENV["GOOGLE_CLOUD_LOCATION"])
+  config.max_retries = 0
+  config.request_timeout = 60
+end
+
+unless File.exist?(File.join(APP_ROOT, ".env"))
+  puts ".env がない。`cp .env.example .env` で作成し、値を記入する。"
+end
+
+failed = false
+
+CHECKS.each do |check|
+  label = check[:name].ljust(10)
+
+  if blank?(ENV[check[:env]])
+    puts "#{label} SKIP  #{check[:env]} が未設定"
+    next
+  end
+
+  begin
+    response = RubyLLM.chat(model: check[:model], provider: check[:provider]).ask("Reply with the single word: pong")
+    puts "#{label} OK    #{check[:model]} (in=#{response.tokens.input} out=#{response.tokens.output} tokens)"
+  rescue StandardError => e
+    failed = true
+    hint = HINTS.find { |klass, _| e.is_a?(klass) }&.last || "下のエラー内容を確認する"
+    puts "#{label} NG    #{e.class}: #{e.message.lines.first&.strip}"
+    puts "#{' ' * 17}→ #{hint}"
+  end
+end
+
+exit 1 if failed
