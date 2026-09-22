@@ -6,6 +6,7 @@
 require "bundler/setup"
 require "dotenv"
 require "ruby_llm"
+require_relative "../lib/failure_kinds"
 
 APP_ROOT = File.expand_path("..", __dir__)
 Dotenv.load(File.join(APP_ROOT, ".env"))
@@ -16,16 +17,6 @@ CHECKS = [
   { name: "xAI",       env: "XAI_API_KEY",          model: "grok-4.3",         provider: :xai },
   { name: "Vertex AI", env: "GOOGLE_CLOUD_PROJECT", model: "gemini-2.5-flash", provider: :vertexai }
 ].freeze
-
-HINTS = {
-  RubyLLM::UnauthorizedError => "キーが無効か失効している。Vertex AI の場合は `gcloud auth application-default login` を実行する",
-  RubyLLM::PaymentRequiredError => "クレジット残高がない。プロバイダーのコンソールで課金設定とチャージを行う",
-  RubyLLM::RateLimitError => "レート制限、または残高不足（OpenAI は残高不足も 429 で返す）。Billing を確認する",
-  RubyLLM::ForbiddenError => "権限不足。モデルへのアクセス権、API の有効化、IAM ロールを確認する",
-  RubyLLM::BadRequestError => "リクエストが拒否された。xAI は無効なキーも 400 で返すため、まずキーを確認する",
-  RubyLLM::ModelNotFoundError => "モデル ID がレジストリにない。このスクリプトの CHECKS を見直す",
-  RubyLLM::ConfigurationError => ".env の値が RubyLLM に渡っていない。変数名を確認する"
-}.freeze
 
 def blank?(value) = value.nil? || value.strip.empty?
 
@@ -58,9 +49,9 @@ CHECKS.each do |check|
     puts "#{label} OK    #{check[:model]} (in=#{response.tokens.input} out=#{response.tokens.output} tokens)"
   rescue StandardError => e
     failed = true
-    hint = HINTS.find { |klass, _| e.is_a?(klass) }&.last || "下のエラー内容を確認する"
-    puts "#{label} NG    #{e.class}: #{e.message.lines.first&.strip}"
-    puts "#{' ' * 17}→ #{hint}"
+    kind = FailureKinds.for(e)
+    puts "#{label} NG    #{kind ? "#{kind.name} (#{e.class})" : e.class}: #{e.message.lines.first&.strip}"
+    puts "#{' ' * 17}→ #{kind&.hint || "上のエラー内容を確認する"}"
   end
 end
 
