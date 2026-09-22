@@ -39,6 +39,7 @@ module Demos
     end
 
     include ScreenHelpers
+    include ChatHelpers
 
     setup do
       FakeHandler.calls = []
@@ -268,14 +269,6 @@ module Demos
       ActiveSupport::Notifications.unsubscribe(subscription)
       # Shutting down clears the exporter, so the spans are read first.
       provider.shutdown
-    end
-
-    def with_chat(chat)
-      original = RubyLLM.method(:chat)
-      RubyLLM.define_singleton_method(:chat) { |**| chat }
-      yield
-    ensure
-      RubyLLM.define_singleton_method(:chat, original)
     end
   end
 end

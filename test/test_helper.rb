@@ -2,6 +2,7 @@ ENV["RAILS_ENV"] ||= "test"
 require_relative "../config/environment"
 require "rails/test_help"
 require_relative "support/screen_helpers"
+require_relative "support/chat_helpers"
 
 # Tests never call a provider. A fake key makes the chats they build
 # independent of the developer's .env, and fails any call that slips through.
