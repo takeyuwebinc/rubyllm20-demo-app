@@ -26,6 +26,29 @@ module ScreenHelpers
     RubyLLM::Speech.new(data: data, model: model, voice: voice, format: format)
   end
 
+  # A run that read a 16-character answer aloud, with its audio attached.
+  def create_speech_run
+    run = create_run(scenario_key: "speak_answer", input: { "text" => "ご注文の商品は明日お届けします。" })
+    run.succeed!({ "speech" => fake_speech(data: "x" * 48_000), "model" => "gpt-4o-mini-tts", "voice" => "marin", "format" => "mp3", "characters" => 16 })
+    run
+  end
+
+  # The speech of a run made by create_speech_run, as the run page shows it.
+  def assert_shows_speech(run)
+    file = run.generated_files.sole
+    assert_select "[data-speech]" do
+      assert_select "audio[controls][src=?]", rails_blob_path(file, only_path: true)
+      assert_select "a[href=?]", rails_blob_path(file, disposition: "attachment", only_path: true), text: "音声を保存する"
+      assert_select "[data-speech-missing]", count: 0
+      assert_select "dd", text: "gpt-4o-mini-tts"
+      assert_select "dd", text: "marin"
+      assert_select "dd", text: "mp3"
+      assert_select "dd", text: "16 文字"
+      assert_select "dd", text: "46.9 KB"
+      assert_select "*", text: /AI が生成したもの/
+    end
+  end
+
   # Replaces the storage service's upload for the block. The replacement is
   # called with the original upload and its arguments.
   def with_storage_upload(replacement)

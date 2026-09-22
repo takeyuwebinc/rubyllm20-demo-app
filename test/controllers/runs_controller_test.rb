@@ -169,6 +169,51 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  test "plays the generated speech, offers it to save, and says it is AI-generated" do
+    run = create_speech_run
+
+    get run_path(run)
+
+    assert_select "[data-run-status]", text: "成功"
+    assert_shows_speech(run)
+  end
+
+  test "says the speech is missing when its attachment is gone, and shows the rest" do
+    run = create_speech_run
+    run.generated_files.sole.purge
+
+    get run_path(run)
+
+    assert_select "[data-speech]" do
+      assert_select "[data-speech-missing]", text: "音声が見つからない"
+      assert_select "audio", count: 0
+      assert_select "a", text: "音声を保存する", count: 0
+      assert_select "dd", text: "gpt-4o-mini-tts"
+      assert_select "dd", text: "marin"
+      assert_select "dd", text: "mp3"
+      assert_select "dd", text: "16 文字"
+      assert_select "dd", text: "46.9 KB"
+      assert_select "*", text: /AI が生成したもの/
+    end
+  end
+
+  # An audio element plays only what is served inline, and seeks with ranges.
+  test "serves the generated speech inline, and in part when a range is asked for" do
+    run = create_speech_run
+
+    get rails_blob_path(run.generated_files.sole, only_path: true)
+    follow_redirect!
+
+    assert_response :success
+    assert_equal "audio/mpeg", response.media_type
+    assert_match(/\Ainline/, response.headers["Content-Disposition"])
+
+    get request.url, headers: { "Range" => "bytes=1000-1999" }
+
+    assert_response :partial_content
+    assert_equal 1000, response.body.bytesize
+  end
+
   test "marks a run waiting for approval in the history and on its demo" do
     run = create_awaiting_run
 

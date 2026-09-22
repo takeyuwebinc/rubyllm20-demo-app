@@ -23,6 +23,10 @@ module Rubyllm20DemoApp
     #
     # Run times are shown in the local time of the one person using this app.
     config.time_zone = "Tokyo"
+    # Generated speech is played back in the run page's audio element, which
+    # plays only a file served inline. Active Storage serves any other type
+    # as a download.
+    config.active_storage.content_types_allowed_inline += %w[audio/mpeg]
     # config.eager_load_paths << Rails.root.join("extras")
   end
 end
