@@ -133,6 +133,78 @@ module Observability
       assert_equal "Reply", chat.attributes["gen_ai.agent.name"]
     end
 
+    # RubyLLM gives an inner workflow's events only the inner workflow's own
+    # metadata, so ordinary code that opens a workflow inside a run's
+    # workflow would otherwise fall out of the run's conversation.
+    test "carries the conversation of an outer workflow into an inner workflow without metadata" do
+      instrument("workflow.ruby_llm", workflow_name: "Run", workflow_id: "outer", workflow_metadata: { conversation_id: "run-1" }) do
+        instrument("workflow.ruby_llm", workflow_name: "Answer ticket", workflow_id: "inner", workflow_parent_id: "outer") do
+          instrument("workflow_step.ruby_llm", workflow_name: "Answer ticket", workflow_id: "inner", workflow_step_name: "Classify") do
+            instrument("chat.ruby_llm", chat_payload(workflow_name: "Answer ticket", workflow_id: "inner")) { |payload| complete(payload) }
+          end
+        end
+      end
+
+      inner, step, chat = spans_named("invoke_agent Answer ticket", "Classify", "chat gpt-5-nano")
+
+      assert_equal %w[run-1 run-1 run-1], [ inner, step, chat ].map { |span| span.attributes["gen_ai.conversation.id"] }
+      assert_equal "Answer ticket", chat.attributes["gen_ai.agent.name"]
+    end
+
+    test "keeps the conversation an inner workflow names for itself" do
+      instrument("workflow.ruby_llm", workflow_name: "Run", workflow_id: "outer", workflow_metadata: { conversation_id: "run-1" }) do
+        inner_metadata = { conversation_id: "ticket-7" }
+        instrument("workflow.ruby_llm", workflow_name: "Answer ticket", workflow_id: "inner", workflow_metadata: inner_metadata) do
+          instrument("chat.ruby_llm", chat_payload(workflow_name: "Answer ticket", workflow_metadata: inner_metadata)) { |payload| complete(payload) }
+        end
+      end
+
+      outer, inner, chat = spans_named("invoke_agent Run", "invoke_agent Answer ticket", "chat gpt-5-nano")
+
+      assert_equal "run-1", outer.attributes["gen_ai.conversation.id"]
+      assert_equal "ticket-7", inner.attributes["gen_ai.conversation.id"]
+      assert_equal "ticket-7", chat.attributes["gen_ai.conversation.id"]
+    end
+
+    test "leaves the conversation out when no enclosing workflow names one" do
+      instrument("workflow.ruby_llm", workflow_name: "Run", workflow_id: "outer") do
+        instrument("workflow.ruby_llm", workflow_name: "Answer ticket", workflow_id: "inner", workflow_parent_id: "outer") do
+          instrument("chat.ruby_llm", chat_payload(workflow_name: "Answer ticket")) { |payload| complete(payload) }
+        end
+      end
+
+      spans = spans_named("invoke_agent Run", "invoke_agent Answer ticket", "chat gpt-5-nano")
+
+      spans.each { |span| assert_not_includes span.attributes.keys, "gen_ai.conversation.id", span.name }
+    end
+
+    test "carries the conversation through several levels of nesting" do
+      instrument("workflow.ruby_llm", workflow_name: "Run", workflow_id: "a", workflow_metadata: { conversation_id: "run-1" }) do
+        instrument("workflow.ruby_llm", workflow_name: "Answer ticket", workflow_id: "b", workflow_parent_id: "a") do
+          instrument("workflow.ruby_llm", workflow_name: "Review", workflow_id: "c", workflow_parent_id: "b") do
+            instrument("chat.ruby_llm", chat_payload(workflow_name: "Review")) { |payload| complete(payload) }
+          end
+        end
+      end
+
+      innermost, chat = spans_named("invoke_agent Review", "chat gpt-5-nano")
+
+      assert_equal "run-1", innermost.attributes["gen_ai.conversation.id"]
+      assert_equal "run-1", chat.attributes["gen_ai.conversation.id"]
+    end
+
+    test "does not carry the conversation of a workflow that has already finished" do
+      instrument("workflow.ruby_llm", workflow_name: "Run", workflow_id: "first", workflow_metadata: { conversation_id: "run-1" }) { :done }
+      instrument("workflow.ruby_llm", workflow_name: "Answer ticket", workflow_id: "second") do
+        instrument("chat.ruby_llm", chat_payload(workflow_name: "Answer ticket")) { |payload| complete(payload) }
+      end
+
+      later, chat = spans_named("invoke_agent Answer ticket", "chat gpt-5-nano")
+
+      assert_not_includes later.attributes.keys, "gen_ai.conversation.id"
+      assert_not_includes chat.attributes.keys, "gen_ai.conversation.id"
+    end
+
     test "records a tool execution with its arguments and result" do
       payload = { provider: "openai", model: "gpt-5-nano", tool_name: "issue_refund", tool_call_id: "call_9", tool_arguments: { "order_id" => 42 } }
 
