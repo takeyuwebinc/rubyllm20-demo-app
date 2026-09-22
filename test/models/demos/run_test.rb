@@ -90,6 +90,16 @@ module Demos
       assert_equal({ "filename" => "video.mp4", "content_type" => "video/mp4", "byte_size" => 9 }, run.result["video"])
     end
 
+    test "names a generated file by its key alone when Rails does not know its MIME type" do
+      run = create_run
+
+      run.succeed!({ "clip" => GeneratedClip.new("bytes", "application/x-unknown") })
+
+      file = run.reload.generated_files.sole
+      assert_equal "clip", file.filename.to_s
+      assert_equal "application/x-unknown", file.content_type
+    end
+
     test "keeps every generated file of a result" do
       run = create_run
 
@@ -153,6 +163,42 @@ module Demos
       assert_predicate run, :running?
       assert_nil run.result
       assert_nil run.finished_at
+      assert_empty run.generated_files
+    end
+
+    # The job records the failure on the same object right after.
+    test "leaves nothing of a result for the next save when saving it fails after the files were stored" do
+      run = create_run
+      failing = true
+      run.define_singleton_method(:save!) do |**options|
+        next super(**options) unless failing
+
+        failing = false
+        raise ActiveRecord::RecordNotSaved.new("Failed to save the record", self)
+      end
+
+      assert_no_difference([ -> { ActiveStorage::Blob.count }, -> { ActiveStorage::Attachment.count } ]) do
+        assert_raises(ActiveRecord::RecordNotSaved) { run.succeed!({ "speech" => fake_speech, "answer" => "after" }) }
+        run.fail_with!(ActiveRecord::RecordNotSaved.new("Failed to save the record"))
+      end
+
+      run.reload
+      assert_predicate run, :failed?
+      assert_nil run.result
+      assert_empty run.generated_files
+    end
+
+    test "refuses to record success on a run waiting for approval before storing anything" do
+      run = create_awaiting_run
+      uploads = 0
+
+      with_storage_upload(->(upload, *args, **options) { uploads += 1; upload.call(*args, **options) }) do
+        assert_raises(ActiveRecord::RecordInvalid) { run.succeed!({ "speech" => fake_speech }) }
+      end
+
+      assert_equal 0, uploads
+      assert_predicate run.reload, :awaiting_approval?
+      assert_nil run.result
       assert_empty run.generated_files
     end
 

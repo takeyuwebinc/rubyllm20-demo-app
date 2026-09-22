@@ -121,6 +121,12 @@ module Demos
         generated_files.attach(blobs) if blobs.any?
         save!
       end
+    rescue StandardError
+      # The rollback undoes what was written, but this object would still
+      # hold the result and the pending attachments, and the next save, such
+      # as the one that records the failure, would write them.
+      reload
+      raise
     end
 
     def fail_with!(error)
