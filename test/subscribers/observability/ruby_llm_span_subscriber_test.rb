@@ -370,6 +370,17 @@ module Observability
       assert_equal 48_000, attributes["ruby_llm.speech.audio_bytes"]
     end
 
+    test "leaves the input out when the text read aloud is empty, and still describes the speech" do
+      instrument("speech.ruby_llm", speech_payload.merge(input: "")) { |payload| complete_speech(payload) }
+
+      attributes = span("generate_content gpt-4o-mini-tts").attributes
+
+      assert_not_includes attributes.keys, "gen_ai.input.messages"
+      assert_equal "marin", attributes["ruby_llm.speech.voice"]
+      assert_equal "mp3", attributes["ruby_llm.speech.format"]
+      assert_equal 48_000, attributes["ruby_llm.speech.audio_bytes"]
+    end
+
     test "marks failed speech as failed, without an audio size" do
       assert_raises(RubyLLM::BadRequestError) do
         instrument("speech.ruby_llm", speech_payload) { raise RubyLLM::BadRequestError.new("Input of 2345 tokens is over the maximum input limit of 2000 tokens") }
@@ -381,6 +392,8 @@ module Observability
       assert_equal "RubyLLM::BadRequestError", speech.attributes["error.type"]
       assert_match(/maximum input limit of 2000 tokens/, speech.attributes["error.message"])
       assert_not_includes speech.attributes.keys, "ruby_llm.speech.audio_bytes"
+      assert_equal "marin", speech.attributes["ruby_llm.speech.voice"], "the voice asked for"
+      assert_equal "mp3", speech.attributes["ruby_llm.speech.format"], "the format asked for"
     end
 
     test "ignores events that are not model work" do
