@@ -1,0 +1,59 @@
+module Demos
+  # A representative scenario of a demo: one case where the feature helps,
+  # runnable against a real provider once it has a handler.
+  class Scenario < Data.define(
+    :key, :demo_key, :name, :providers, :models, :inputs, :handler_name, :result_kind, :retryable
+  )
+    Input = Data.define(:name, :label, :default, :required)
+
+    # :runnable, :missing_config (with the providers that lack settings), or
+    # :preparing (no handler yet).
+    Availability = Data.define(:state, :missing_providers) do
+      def runnable? = state == :runnable
+      def missing_config? = state == :missing_config
+      def preparing? = state == :preparing
+    end
+
+    def demo
+      Catalog.demo(demo_key)
+    end
+
+    def implemented?
+      handler_name.present?
+    end
+
+    def handler
+      handler_name&.constantize
+    end
+
+    # Tells whether the settings the providers need are present. Whether they
+    # are valid shows up only when a run fails.
+    def availability(config = RubyLLM.config)
+      return Availability.new(:preparing, []) unless implemented?
+
+      missing = providers.reject { |provider| configured?(provider, config) }
+      missing.any? ? Availability.new(:missing_config, missing) : Availability.new(:runnable, [])
+    end
+
+    # Values for this scenario's own inputs, taken as given. An input that
+    # was not given at all gets its default.
+    def input_values(given)
+      inputs.to_h { |input| [ input.name, given.key?(input.name) ? given[input.name] : input.default ] }
+    end
+
+    def blank_required_inputs(values)
+      inputs.select(&:required).map(&:name).select { |name| values[name].blank? }
+    end
+
+    private
+
+    # Only the names of the required settings are public in RubyLLM 2.0.0;
+    # the provider's own configured? check is not. The names come from
+    # RubyLLM so that this app does not keep a copy of them.
+    def configured?(provider, config)
+      provider_class = RubyLLM::Provider.providers[provider.to_sym]
+      provider_class.present? &&
+        provider_class.configuration_requirements.all? { |setting| config.public_send(setting).present? }
+    end
+  end
+end

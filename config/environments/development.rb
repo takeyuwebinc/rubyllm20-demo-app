@@ -6,6 +6,9 @@ Rails.application.configure do
   # Make code changes take effect immediately without server restart.
   config.enable_reloading = true
 
+  # The demo catalog is data, not code; editing it should reload like code.
+  config.watchable_files << Rails.root.join("config/demos.yml").to_s
+
   # Do not eager load code on boot.
   config.eager_load = false
 
