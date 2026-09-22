@@ -3,6 +3,10 @@ require_relative "../config/environment"
 require "rails/test_help"
 require_relative "support/screen_helpers"
 
+# Tests never call a provider. A fake key makes the chats they build
+# independent of the developer's .env, and fails any call that slips through.
+RubyLLM.config.openai_api_key = "sk-test"
+
 module ActiveSupport
   class TestCase
     # Run tests in parallel with specified workers
