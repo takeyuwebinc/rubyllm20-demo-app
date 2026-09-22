@@ -63,6 +63,17 @@ module Demos
       handler.perform(**input_values(input).symbolize_keys, **models.symbolize_keys)
     end
 
+    # Records a person's decision on a tool call of the run's chat. Only a
+    # handler that stops for approval has this.
+    def decide(chat, tool_call_id, approved:)
+      handler.decide(chat, tool_call_id, approved:)
+    end
+
+    # Continues the run's chat after a decision. Returns as perform does.
+    def resume(chat)
+      handler.resume(chat)
+    end
+
     private
 
     # Only the names of the required settings are public in RubyLLM 2.0.0;

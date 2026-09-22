@@ -26,6 +26,9 @@ module Demos
     # can play them back.
     has_many_attached :generated_files
 
+    # chat_id is deliberately not an association: the run forbids loading
+    # associations late, and the chat is read by id where it is needed.
+
     validates :scenario_key, :conversation_id, presence: true
     validate :status_transition, on: :update, if: :will_save_change_to_status?
 
@@ -61,15 +64,10 @@ module Demos
       end
 
       # Solid Queue does not run a dead worker's jobs again, so their runs
-      # would otherwise stay running forever.
+      # would otherwise stay running forever. A run waiting for approval has
+      # no job, so it is never among them.
       def fail_abandoned!(run_ids, message: nil)
-        running.where(id: run_ids).find_each do |run|
-          run.fail!(
-            "kind" => FailureKinds::WORKER_LOST.name,
-            "message" => message,
-            "hint" => FailureKinds::WORKER_LOST.hint
-          )
-        end
+        running.where(id: run_ids).find_each { |run| run.fail_as!(FailureKinds::WORKER_LOST, message:) }
       end
 
       private
@@ -113,6 +111,45 @@ module Demos
 
     def fail!(failure)
       update!(status: :failed, failure: failure, finished_at: Time.current)
+    end
+
+    # Fails the run for a reason other than a provider call.
+    def fail_as!(kind, message: nil)
+      fail!("kind" => kind.name, "message" => message, "hint" => kind.hint)
+    end
+
+    # Stops the run until a person decides on the chat's pending tool calls.
+    # What was asked is kept with the run, so the history shows it without
+    # loading the chat through the scenario's tools, and even after the
+    # scenario is gone. A run can stop more than once: requests already
+    # kept, and the decisions on them, stay.
+    def await_approval!(chat)
+      pending = chat.pending_approvals.to_a
+      # With nothing to decide, the run could never be continued.
+      raise ArgumentError, "Chat #{chat.id} has no tool call awaiting approval" if pending.empty?
+
+      known = approval_requests.map { |request| request["tool_call_id"] }
+      added = pending.reject { |call| known.include?(call.tool_call_id) }.map do |call|
+        { "tool_call_id" => call.tool_call_id, "name" => call.name, "arguments" => call.arguments, "decision" => nil }
+      end
+      update!(status: :awaiting_approval, chat_id: chat.id, approval_requests: approval_requests + added)
+    end
+
+    def approval_request(tool_call_id)
+      approval_requests.find { |request| request["tool_call_id"] == tool_call_id }
+    end
+
+    # Keeps the person's decision on one request and continues the run.
+    # The decision itself is recorded on the chat by the scenario; this is
+    # the copy the history shows.
+    def resume!(tool_call_id, decision)
+      raise ArgumentError, "Run #{id} has no approval request #{tool_call_id}" unless approval_request(tool_call_id)
+
+      requests = approval_requests.map do |request|
+        request["tool_call_id"] == tool_call_id ? request.merge("decision" => decision) : request
+      end
+      update!(status: :running, approval_requests: requests)
+      RunJob.perform_later(self)
     end
 
     def add_trace_id!(trace_id)

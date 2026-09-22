@@ -58,6 +58,127 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  test "asks for a decision on the proposed refund and stops polling" do
+    run = create_awaiting_run(order_id: 7)
+
+    get run_path(run)
+
+    assert_select "[data-run-status]", text: "承認待ち"
+    assert_select "[data-controller='poll'][data-poll-active-value='false']"
+    assert_select "[data-approval]" do
+      assert_select "code", text: "issue_refund"
+      assert_select "dt", text: "order_id"
+      assert_select "dd", text: "7"
+      assert_select "dt", text: "reason"
+      assert_select "dd", text: "商品が破損していた"
+      assert_select "form[action=?] button[type=submit].btn-primary", run_decision_path(run), text: "承認する"
+      assert_select "form[action=?] button[type=submit].btn-secondary", run_decision_path(run), text: "却下する"
+      assert_select "input[name='tool_call_id'][value='call_1']", 2
+      assert_select "input[name='decision'][value='approve']"
+      assert_select "input[name='decision'][value='deny']"
+      assert_select "*", text: /却下するとツールは実行されず/
+      assert_select "*", text: /履歴からこの実行を開いて決められる/
+    end
+  end
+
+  test "shows the decision instead of the buttons for a request already decided, while another waits" do
+    run = create_awaiting_run(tool_call_id: "call_2")
+    run.update!(approval_requests: [
+      { "tool_call_id" => "call_1", "name" => "issue_refund", "arguments" => { "order_id" => 1, "reason" => "最初の提案" }, "decision" => "approved" }
+    ] + run.approval_requests)
+
+    get run_path(run)
+
+    assert_select "[data-approval-request='call_1']" do
+      assert_select "*", text: /決定: 承認/
+      assert_select "button", count: 0
+    end
+    assert_select "[data-approval-request='call_2']" do
+      assert_select "*", text: /決定:/, count: 0
+      assert_select "button", text: "承認する"
+      assert_select "button", text: "却下する"
+    end
+  end
+
+  test "drops the approval section once the run continues" do
+    run = create_awaiting_run
+    run.resume!("call_1", "approved")
+
+    get run_path(run)
+
+    assert_select "[data-run-status]", text: "実行中"
+    assert_select "[data-controller='poll'][data-poll-active-value='true']"
+    assert_select "[data-approval]", count: 0
+    assert_select "button", text: "承認する", count: 0
+  end
+
+  test "shows the approved refund: the proposal, the decision, the order, and the answer" do
+    run = create_refund_run("approved", order_status: "refunded", refund_reason: "商品が破損していた", refunded_at: "2026-09-22T10:00:00+09:00")
+
+    get run_path(run)
+
+    assert_select "[data-run-status]", text: "成功"
+    assert_select "[data-refund-decision]" do
+      assert_select "[data-proposal] code", text: "issue_refund"
+      assert_select "[data-proposal] dd", text: "7"
+      assert_select "[data-decision]", text: "承認"
+      assert_select "[data-order]" do
+        assert_select "dd", text: "注文番号 C-1、7,980 円"
+        assert_select "dd", text: "返金済み"
+        assert_select "dd", text: "商品が破損していた"
+        assert_select "dd", text: "2026-09-22 10:00:00"
+      end
+      assert_select "*", text: "返金を承りました。"
+      assert_select "*", text: /gpt-5-nano-2025-08-07/
+    end
+  end
+
+  test "shows the denied refund with the order still paid" do
+    run = create_refund_run("denied", order_status: "paid")
+
+    get run_path(run)
+
+    assert_select "[data-refund-decision]" do
+      assert_select "[data-decision]", text: "却下"
+      assert_select "[data-order] dd", text: "支払い済み"
+      assert_select "[data-order] dd", text: "返金済み", count: 0
+    end
+  end
+
+  test "says when the model proposed no refund" do
+    run = create_run(scenario_key: "approve_refund", input: { "inquiry" => "x", "order" => "y" })
+    run.succeed!({ "answer" => "返金の対象ではありません。", "order" => order_result("paid"), "model" => "gpt-5-nano-2025-08-07" })
+
+    get run_path(run)
+
+    assert_select "[data-refund-decision]" do
+      assert_select "*", text: "返金の提案なし"
+      assert_select "[data-decision]", count: 0
+      assert_select "[data-order] dd", text: "支払い済み"
+    end
+  end
+
+  test "says when the order the model named was not found" do
+    run = create_refund_run("approved", order: nil)
+
+    get run_path(run)
+
+    assert_select "[data-refund-decision]" do
+      assert_select "*", text: "注文が見つからない"
+      assert_select "[data-order]", count: 0
+    end
+  end
+
+  test "marks a run waiting for approval in the history and on its demo" do
+    run = create_awaiting_run
+
+    get runs_path
+    assert_select "[data-run='#{run.id}'] [data-run-status]", text: "承認待ち"
+
+    get demo_path("tool-approval")
+    assert_select "a[href=?] [data-run-status]", run_path(run), text: "承認待ち"
+  end
+
   test "shows what failed, where, and the likely causes" do
     run = create_run.tap { |r| r.fail_with!(RubyLLM::RateLimitError.new("You exceeded your current quota")) }
 
@@ -167,6 +288,20 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
   end
 
   private
+
+  def order_result(status, refund_reason: nil, refunded_at: nil)
+    { "description" => "注文番号 C-1、7,980 円", "status" => status, "refund_reason" => refund_reason, "refunded_at" => refunded_at }
+  end
+
+  # A finished refund run: it stopped once for the decision, then the model
+  # answered.
+  def create_refund_run(decision, order: :from_status, order_status: "paid", refund_reason: nil, refunded_at: nil)
+    run = create_awaiting_run(order_id: 7)
+    run.resume!("call_1", decision)
+    order = order_result(order_status, refund_reason:, refunded_at:) if order == :from_status
+    run.succeed!({ "answer" => "返金を承りました。", "order" => order, "model" => "gpt-5-nano-2025-08-07" })
+    run
+  end
 
   def create_ticket_workflow_run(review)
     run = create_run(scenario_key: "run_ticket_workflow", input: { "ticket" => "電気ケトルの電源が入りません。" })

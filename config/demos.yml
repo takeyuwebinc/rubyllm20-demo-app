@@ -63,12 +63,47 @@
   name: Tool Approval
   official_name: Human Approval for Tools
   summary: 返金、削除、送信のように取り消せない操作を AI に提案させ、実行するかどうかは人が決めたい
+  useful_cases: |-
+    返金、削除、送信のように取り消せない操作を AI に提案させ、実行するかどうかは人が決めたい場合に役立つ。ツールのクラスで `requires_approval` を宣言すると、モデルがそのツールを呼んでも、人の決定があるまで実行されない。`ask` は承認待ちの状態で戻り、`pending_approvals` で決定待ちの呼び出し（ツール名と引数）を読める。
+
+    決定は `approve` と `deny` で記録し、`complete` で続きを実行する。承認した呼び出しはそこで実行され、却下した呼び出しは実行されずに、却下されたという結果がモデルに渡る。モデルはそれを踏まえて応答する。
+
+    Rails では、決定はツール呼び出しの記録に残る。Web のプロセスで決定を記録し、別のジョブが `complete` で続きを実行できる。記録は、`chat_model` を宣言した `RubyLLM::Agent` のクラスの `find` で読み込むと、指示文とツールが復元される。`Chat.find` だけでは、ツールが承認を要することが分からず、止まらずに進んでしまう。中断で処理がもう一度動くことがあるため、ツールは 2 度実行しても安全に書く。このデモの返金は、返金済みの注文には何もしない。
+  without_it: |-
+    `requires_approval` のないツールは、モデルが呼んだ時点で `ask` の内側で実行され、人が割り込む余地がない。決定を記録しても無視される。
+
+    人の決定を挟むには、ループを自分で進める（`ask_later`、`generate`、`run_tools`）。応答にツール呼び出しが含まれるかを調べ、決定を自分の記録として保存し、承認ならツールを実行し、却下なら却下の結果をツールの結果として自分で組み立ててモデルに渡し、別のプロセスで続きを実行する。この仕組みを、自分で書いて保守することになる。
   sources:
-    - title: Controlling Tool Execution（RubyLLM）
-      url: https://rubyllm.com/tool-execution/
+    - title: Controlling Tool Execution（RubyLLM）— Requiring Approval と Approval in Rails
+      url: https://rubyllm.com/tool-execution/#requiring-approval
+    - title: Durable Agents（RubyLLM）— Parking for a Human Decision
+      url: https://rubyllm.com/durable-agents/#parking-for-a-human-decision
+    - title: Agents（RubyLLM）— Rails-Backed Agents
+      url: https://rubyllm.com/agents/#rails-backed-agents
+    - title: What's New in 2.0（RubyLLM）— Human Approval for Tools
+      url: https://rubyllm.com/whats-new-in-2-0/#human-approval-for-tools
   scenarios:
     - key: approve_refund
       name: AI が提案した返金を承認する
+      handler: ToolApproval::AnswerRefundRequest
+      providers: [openai]
+      models:
+        model: gpt-5-nano
+      inputs:
+        - name: inquiry
+          label: 返金を求める問い合わせ文
+          required: true
+          default: |-
+            注文番号 C-30871 のコーヒーメーカーが、届いた時点で外装が割れていました。箱にも大きなへこみがあります。交換ではなく返金してください。
+        - name: order
+          label: 返金の対象の注文
+          required: true
+          default: |-
+            注文番号 C-30871、ドリップ式コーヒーメーカー 1 台、7,980 円、クレジットカードで支払い済み、2026-09-18 に配達済み
+      result_kind: refund_decision
+      # Starting over would make a second order and a second proposal; a
+      # run that stopped for approval continues its chat instead.
+      retryable: false
 
 - key: batches
   name: Batches

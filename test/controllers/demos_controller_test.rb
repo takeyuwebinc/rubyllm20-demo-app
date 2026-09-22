@@ -79,6 +79,42 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
     assert_select "#run_ticket_workflow input[type=submit][value='実行する'][disabled]"
   end
 
+  test "shows the refund approval as runnable with its explanation, sources, code, and default inputs" do
+    with_openai_key("sk-test") { get root_path }
+
+    assert_select "[data-demo='tool-approval'] [data-availability]", text: "実行できる"
+
+    with_openai_key("sk-test") { get demo_path("tool-approval") }
+
+    assert_select "h2", text: "役立つケース"
+    assert_select "*", text: /人の決定があるまで実行されない/
+    assert_select "h2", text: "使わない場合に困ること"
+    assert_select "*", text: /ループを自分で進める/
+    assert_select "a[href='https://rubyllm.com/tool-execution/#requiring-approval'][target='_blank']"
+    assert_select "a[href='https://rubyllm.com/durable-agents/#parking-for-a-human-decision'][target='_blank']"
+    assert_select "a[href='https://rubyllm.com/agents/#rails-backed-agents'][target='_blank']"
+    assert_select "a[href='https://rubyllm.com/whats-new-in-2-0/#human-approval-for-tools'][target='_blank']"
+    assert_select "#approve_refund" do
+      assert_select "pre code", text: /requires_approval/
+      assert_select "pre code", text: /class RefundAgent < RubyLLM::Agent/
+      assert_select "pre code", text: /RefundAgent\.find/
+      assert_select "textarea[name='run[input][inquiry]']", text: /C-30871/
+      assert_select "textarea[name='run[input][order]']", text: /7,980 円/
+      assert_select "input[type=submit][value='実行する']:not([disabled])"
+    end
+  end
+
+  test "keeps the refund approval from running without OpenAI settings" do
+    with_openai_key(nil) { get root_path }
+
+    assert_select "[data-demo='tool-approval'] [data-availability]", text: "設定値が足りない（OpenAI）"
+
+    with_openai_key(nil) { get demo_path("tool-approval") }
+
+    assert_select "#approve_refund [data-availability]", text: "設定値が足りない（OpenAI）"
+    assert_select "#approve_refund input[type=submit][value='実行する'][disabled]"
+  end
+
   test "shows a scenario being prepared without code or input" do
     get demo_path("citations")
 

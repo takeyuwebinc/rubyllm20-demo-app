@@ -61,6 +61,14 @@ module FailureKinds
     "ジョブのワーカーが止まった。ワーカーが動いていることを確かめ、もう一度実行する"
   )
 
+  # Not raised by a provider call: Solid Queue puts a job back in the queue
+  # when its worker stops gracefully, and a scenario that must not start over
+  # cannot go on without a record of where it got to.
+  INTERRUPTED = Kind.new(
+    "ジョブの中断",
+    "ジョブのワーカーが止まってジョブが戻されたが、途中から再開できる記録がない。もう一度実行する"
+  )
+
   # Returns the Kind for +error+, or nil when the table does not know it.
   def self.for(error)
     TABLE.find { |error_class, _| error.is_a?(error_class) }&.last

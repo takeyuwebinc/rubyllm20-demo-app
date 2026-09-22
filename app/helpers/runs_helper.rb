@@ -14,6 +14,26 @@ module RunsHelper
     "cancelled" => "bg-gray-50 text-gray-600 ring-gray-500/10"
   }.freeze
 
+  DECISION_LABELS = { "approved" => "承認", "denied" => "却下" }.freeze
+  ORDER_STATUS_LABELS = { "paid" => "支払い済み", "refunded" => "返金済み" }.freeze
+
+  def decision_label(decision)
+    DECISION_LABELS.fetch(decision, decision)
+  end
+
+  def order_status_label(status)
+    ORDER_STATUS_LABELS.fetch(status, status)
+  end
+
+  # The arguments of a proposed tool call, as the model wrote them.
+  def tool_arguments_list(arguments)
+    tag.dl(class: "mt-2 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm") do
+      safe_join(arguments.map do |name, value|
+        tag.dt(name, class: "font-mono text-gray-500") + tag.dd(value.to_s, class: "break-words text-gray-900")
+      end)
+    end
+  end
+
   def run_status_badge(run, size: :small)
     text_size = size == :large ? "px-3 py-1 text-base" : "px-2 py-1 text-xs"
     tag.span(STATUS_LABELS.fetch(run.status), data: { run_status: run.status },
