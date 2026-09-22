@@ -26,6 +26,38 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
     assert_select "*", text: /gpt-5-nano-2025-08-07/
   end
 
+  test "shows the ticket workflow's result under headings named and ordered like its steps" do
+    run = create_ticket_workflow_run("verdict" => "要修正", "findings" => [ "交換の条件を案内する", "連絡先を添える" ])
+
+    get run_path(run)
+
+    assert_select "[data-ticket-workflow] h2" do |headings|
+      assert_equal %w[分類 回答の下書き レビュー], headings.map { |heading| heading.text.strip }
+    end
+    assert_select "[data-ticket-workflow]" do
+      assert_select "*", text: "商品の不具合"
+      assert_select "*", text: "電源が入らないという訴えのため"
+      assert_select "*", text: /ご不便をおかけしております/
+      assert_select "*", text: "要修正"
+      assert_select "li", text: "交換の条件を案内する"
+      assert_select "li", text: "連絡先を添える"
+      assert_select "*", text: /gpt-5-nano-2025-08-07/
+      assert_select "*", text: "指摘なし", count: 0
+    end
+  end
+
+  test "says the review found nothing when the draft passed" do
+    run = create_ticket_workflow_run("verdict" => "合格", "findings" => [])
+
+    get run_path(run)
+
+    assert_select "[data-ticket-workflow]" do
+      assert_select "*", text: "合格"
+      assert_select "*", text: "指摘なし"
+      assert_select "li", count: 0
+    end
+  end
+
   test "shows what failed, where, and the likely causes" do
     run = create_run.tap { |r| r.fail_with!(RubyLLM::RateLimitError.new("You exceeded your current quota")) }
 
@@ -132,5 +164,18 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
 
     assert_select "[data-run]", 20
     assert_select "a[href=?]", runs_path(page: 2)
+  end
+
+  private
+
+  def create_ticket_workflow_run(review)
+    run = create_run(scenario_key: "run_ticket_workflow", input: { "ticket" => "電気ケトルの電源が入りません。" })
+    run.succeed!({
+      "category" => "商品の不具合",
+      "reason" => "電源が入らないという訴えのため",
+      "draft" => "ご不便をおかけしております。交換の手続きをご案内します。",
+      "model" => "gpt-5-nano-2025-08-07"
+    }.merge(review))
+    run
   end
 end

@@ -47,6 +47,38 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  test "shows the ticket workflow as runnable with its explanation, sources, code, and default ticket" do
+    with_openai_key("sk-test") { get root_path }
+
+    assert_select "[data-demo='workflow-instrumentation'] [data-availability]", text: "実行できる"
+
+    with_openai_key("sk-test") { get demo_path("workflow-instrumentation") }
+
+    assert_select "h2", text: "役立つケース"
+    assert_select "*", text: /どのステップが時間とコストを使っているかを知りたい/
+    assert_select "h2", text: "使わない場合に困ること"
+    assert_select "*", text: /3 つの chat のイベントは/
+    assert_select "a[href='https://rubyllm.com/instrumentation/#workflows-and-steps'][target='_blank']"
+    assert_select "a[href='https://rubyllm.com/agentic-workflows/'][target='_blank']"
+    assert_select "#run_ticket_workflow" do
+      assert_select "pre code", text: /RubyLLM\.workflow\("サポートチケットへの回答"\)/
+      assert_select "pre code", text: /workflow\.step\("レビュー"\)/
+      assert_select "textarea[name='run[input][ticket]']", text: /B-20517/
+      assert_select "input[type=submit][value='実行する']:not([disabled])"
+    end
+  end
+
+  test "keeps the ticket workflow from running without OpenAI settings" do
+    with_openai_key(nil) { get root_path }
+
+    assert_select "[data-demo='workflow-instrumentation'] [data-availability]", text: "設定値が足りない（OpenAI）"
+
+    with_openai_key(nil) { get demo_path("workflow-instrumentation") }
+
+    assert_select "#run_ticket_workflow [data-availability]", text: "設定値が足りない（OpenAI）"
+    assert_select "#run_ticket_workflow input[type=submit][value='実行する'][disabled]"
+  end
+
   test "shows a scenario being prepared without code or input" do
     get demo_path("citations")
 

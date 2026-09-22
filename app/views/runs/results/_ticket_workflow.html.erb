@@ -1,0 +1,37 @@
+<%# The headings carry the workflow's step names, in the same order, so the result reads beside the steps of its trace. %>
+<% result = run.result %>
+<% findings = result["findings"] %>
+<div data-ticket-workflow class="max-w-prose space-y-6">
+  <section>
+    <h2 class="text-base font-semibold text-gray-700">分類</h2>
+    <dl class="mt-2 grid grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-sm">
+      <dt class="text-gray-500">区分</dt>
+      <dd class="font-medium text-gray-900"><%= result["category"] %></dd>
+      <dt class="text-gray-500">理由</dt>
+      <dd class="break-words text-gray-800"><%= result["reason"] %></dd>
+    </dl>
+  </section>
+
+  <section>
+    <h2 class="text-base font-semibold text-gray-700">回答の下書き</h2>
+    <div class="mt-2 whitespace-pre-wrap break-words leading-relaxed text-gray-900"><%= result["draft"] %></div>
+  </section>
+
+  <section>
+    <h2 class="text-base font-semibold text-gray-700">レビュー</h2>
+    <p class="mt-2">
+      <span class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset <%= result["verdict"] == WorkflowInstrumentation::RunTicketWorkflow::PASSED ? "bg-green-50 text-green-700 ring-green-600/20" : "bg-amber-50 text-amber-800 ring-amber-600/20" %>"><%= result["verdict"] %></span>
+    </p>
+    <% if findings.any? %>
+      <ul class="mt-2 list-disc space-y-1 pl-5 text-sm text-gray-800">
+        <% findings.each do |finding| %>
+          <li class="break-words"><%= finding %></li>
+        <% end %>
+      </ul>
+    <% else %>
+      <p class="mt-2 text-sm text-gray-500">指摘なし</p>
+    <% end %>
+  </section>
+
+  <p class="text-sm text-gray-500">応答したモデル: <%= result["model"] %></p>
+</div>

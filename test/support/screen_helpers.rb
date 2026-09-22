@@ -17,7 +17,7 @@ module ScreenHelpers
     originals.each { |key, value| ENV[key] = value }
   end
 
-  def create_run(scenario_key: "answer_inquiry", **attributes)
-    Demos::Run.create!(scenario_key: scenario_key, input: { "inquiry" => "Where is my order?" }, **attributes)
+  def create_run(scenario_key: "answer_inquiry", input: { "inquiry" => "Where is my order?" }, **attributes)
+    Demos::Run.create!(scenario_key: scenario_key, input: input, **attributes)
   end
 end

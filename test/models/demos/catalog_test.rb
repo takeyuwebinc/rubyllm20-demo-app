@@ -53,6 +53,15 @@ module Demos
       end
     end
 
+    test "starts the ticket workflow over when its job runs again, from one ticket" do
+      scenario = Catalog.scenario("run_ticket_workflow")
+
+      assert_equal WorkflowInstrumentation::RunTicketWorkflow, scenario.handler
+      assert_equal true, scenario.retryable
+      assert_equal %w[ticket], scenario.inputs.map(&:name)
+      assert scenario.inputs.sole.required
+    end
+
     # Availability is judged from the providers a scenario lists, while the
     # handler reaches the provider through the model id. They must agree.
     test "lists the provider each model of an implemented scenario resolves to" do
