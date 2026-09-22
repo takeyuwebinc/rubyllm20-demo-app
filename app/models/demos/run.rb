@@ -99,11 +99,23 @@ module Demos
     # and Image) is kept as an attachment named after its key, and the
     # result keeps a reference to it in its place: the filename, the content
     # type, and the byte size. The result stays plain JSON, and the history
-    # plays the file back from the attachment.
+    # plays the file back from the attachment. The bytes themselves are not
+    # put in the result: the JSON column would grow by the size of every
+    # file, and playing one back would need a route of its own.
+    #
+    # The reference names the file rather than the attachment's id, so a
+    # view finds the file from the result's key alone. A key names one file
+    # per run.
     #
     # The files are uploaded inside the transaction that records the result,
     # so a failure part way leaves no attachment, no result, and the status
     # as it was. A file already written to the storage may remain there.
+    #
+    # A Video or an Image that holds only a URL downloads itself from the
+    # provider in to_blob, inside that transaction.
+    # TODO(when the product video scenario is implemented): decide whether
+    # its handler fetches the video first, keeping the download out of the
+    # transaction.
     def succeed!(result)
       refuse_transition!("succeeded")
 

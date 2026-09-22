@@ -164,6 +164,10 @@
       # do not.
       models:
         model: gpt-4o-mini-tts
+      # Only the answer is an input. The voice and the manner of speaking
+      # are fixed in the handler, where the code shows how to choose them;
+      # a voice given as an input would need checking against the voices
+      # the model has.
       inputs:
         - name: text
           label: 読み上げる回答文
