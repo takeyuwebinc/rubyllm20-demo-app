@@ -195,6 +195,7 @@ Vertex AI  SKIP  GOOGLE_CLOUD_PROJECT が未設定
 - 既製の OpenTelemetry 計装 gem が 2 つとも使えないこと（gem の中身の確認と、RubyLLM 2.0.0 での実行）
 - RubyLLM の計装イベントから作った OpenTelemetry のスパンを、Sentry が OTLP で受理すること。トレース画面で `gen_ai.invoke_agent`、`gen_ai.chat`、`http.client` の各スパンが親子関係つきで表示され、Agent Activity のタブと、エージェント用のスパン詳細（Agent Name、Input、Output）が出ること（2026-09-19 に実送信し、利用者が Sentry の画面で確認）
 - アプリの計装で送った会話が、Sentry の Agents の Conversations に表示されること。2 ターンの会話が、会話 ID で 1 つにまとまり、LLM の呼び出し回数、トークン数、コスト、ツールの呼び出し（名前と引数）、発話と応答の本文が出ること（2026-09-19 に実アプリ経由で送信し、利用者が Sentry の画面で確認）
+- アプリの画面から実行した代表シナリオのトレースが、Puma から fork したジョブのワーカーからも Sentry に届くこと。`http.client` のスパンが `POST responses` になり、OpenAI のモデルが Responses API で送られていること。実行の画面が組み立てた URL で、トレースと会話の画面が開けること（2026-09-22 に F1 を実行し、利用者が Sentry の画面で確認）
 - `bin/check_keys` の SKIP 経路、無効なキーでの NG 経路、有効な認証情報での OK 経路（4 プロバイダーとも、2026-09-19 に実リクエストで確認）。上の出力例のトークン数は例示
 - 失効した ADC では Vertex AI が `UnauthorizedError` になり、`gcloud auth application-default login` で解消すること（実リクエスト）
 - Deep Research のリクエストを受けるサービスが `aiplatform.googleapis.com` であること（クォータ超過のエラーメッセージに記載）
