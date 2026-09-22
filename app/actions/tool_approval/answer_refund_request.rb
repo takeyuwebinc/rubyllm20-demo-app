@@ -33,6 +33,10 @@ module ToolApproval
       end
     end
 
+    # No model is declared: the scenario passes it to create!, and find reads
+    # it back from the record. The instructions name no order either. find
+    # rebuilds them on every load, so an order in them would have to be
+    # given again when the chat is resumed; it goes in the message instead.
     class RefundAgent < RubyLLM::Agent
       chat_model Chat
       instructions <<~TEXT
@@ -101,7 +105,9 @@ module ToolApproval
       private
 
       # The order the model asked to refund, read back from the recorded
-      # tool call. Nil when the model named an order that does not exist.
+      # tool call: the run keeps nothing specific to this scenario, and the
+      # chat has no column of this app's. Nil when the model named an order
+      # that does not exist.
       def proposed_order(chat)
         call = chat.messages.flat_map { |message| message.tool_calls.values }.find { |c| c.name == IssueRefund.tool_name }
         Shop::Order.find_by(id: call.arguments["order_id"]) if call

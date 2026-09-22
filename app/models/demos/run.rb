@@ -26,6 +26,9 @@ module Demos
     # can play them back.
     has_many_attached :generated_files
 
+    # chat_id is deliberately not an association: the run forbids loading
+    # associations late, and the chat is read by id where it is needed.
+
     validates :scenario_key, :conversation_id, presence: true
     validate :status_transition, on: :update, if: :will_save_change_to_status?
 
@@ -61,7 +64,8 @@ module Demos
       end
 
       # Solid Queue does not run a dead worker's jobs again, so their runs
-      # would otherwise stay running forever.
+      # would otherwise stay running forever. A run waiting for approval has
+      # no job, so it is never among them.
       def fail_abandoned!(run_ids, message: nil)
         running.where(id: run_ids).find_each { |run| run.fail_as!(FailureKinds::WORKER_LOST, message:) }
       end
@@ -115,8 +119,9 @@ module Demos
     end
 
     # Stops the run until a person decides on the chat's pending tool calls.
-    # What was asked is kept with the run, so the history shows it even after
-    # the chat has moved on. A run can stop more than once: requests already
+    # What was asked is kept with the run, so the history shows it without
+    # loading the chat through the scenario's tools, and even after the
+    # scenario is gone. A run can stop more than once: requests already
     # kept, and the decisions on them, stay.
     def await_approval!(chat)
       pending = chat.pending_approvals.to_a

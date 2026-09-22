@@ -1,6 +1,7 @@
 module Shop
   # An order of the fictional shop. A demo run makes its own, so that there is
   # always an order that can still be refunded, and never touches a real one.
+  # Orders are never removed: the history's results refer to them.
   class Order < ApplicationRecord
     enum :status, { paid: "paid", refunded: "refunded" }, validate: true
 

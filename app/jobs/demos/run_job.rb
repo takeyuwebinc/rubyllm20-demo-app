@@ -45,6 +45,8 @@ module Demos
         return
       end
 
+      # A continued run keeps its started_at: it tells a job that ran again
+      # from a first run, and dates the links to the run's traces.
       run.update!(started_at: Time.current) unless chat
       outcome = RubyLLM.workflow(workflow_name(scenario), metadata: { conversation_id: run.conversation_id }) do
         record_trace(run)

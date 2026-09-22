@@ -8,6 +8,7 @@ module Runs
     def create
       @run = Demos::Run.find(params[:run_id])
       @decision_refused = refusal_reason(@run)
+      # Refused with 422: Turbo ignores a 2xx page in answer to a form.
       return render "runs/show", status: :unprocessable_entity if @decision_refused
 
       decision = DECISIONS.fetch(params[:decision])
