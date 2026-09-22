@@ -21,6 +21,22 @@ module ScreenHelpers
     Demos::Run.create!(scenario_key: scenario_key, input: input, **attributes)
   end
 
+  # Audio as RubyLLM.speak returns it. Building one calls no provider.
+  def fake_speech(data: "mp3 bytes", model: "gpt-4o-mini-tts", voice: "marin", format: "mp3")
+    RubyLLM::Speech.new(data: data, model: model, voice: voice, format: format)
+  end
+
+  # Replaces the storage service's upload for the block. The replacement is
+  # called with the original upload and its arguments.
+  def with_storage_upload(replacement)
+    service = ActiveStorage::Blob.service
+    original = service.method(:upload)
+    service.define_singleton_method(:upload) { |*args, **options| replacement.call(original, *args, **options) }
+    yield
+  ensure
+    service.singleton_class.remove_method(:upload)
+  end
+
   # A persisted chat of the refund agent, without calling a provider. The
   # model record is made first: RubyLLM would otherwise load its whole
   # registry into the empty test database.
