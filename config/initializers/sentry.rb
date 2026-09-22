@@ -20,6 +20,11 @@ unless Rails.env.test?
     config.dsn = ENV["SENTRY_DSN"].presence
     config.breadcrumbs_logger = [ :active_support_logger, :http_logger ]
 
+    # Application code reports through Rails.error only, never the Sentry SDK.
+    # sentry-rails leaves this subscriber off by default, which would silently
+    # drop every Rails.error.report.
+    config.rails.register_error_subscriber = true
+
     # Both default to false in sentry-opentelemetry 7.0. The exporter's endpoint
     # and auth header are derived from the DSN.
     config.otlp.enabled = true
