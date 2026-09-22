@@ -1,0 +1,48 @@
+<%# The proposal and the decision belong to the run; the answer and the order come from the result. %>
+<% result = run.result %>
+<% order = result["order"] %>
+<div data-refund-decision class="max-w-prose space-y-6">
+  <section>
+    <h2 class="text-base font-semibold text-gray-700">返金の提案</h2>
+    <% if run.approval_requests.any? %>
+      <% run.approval_requests.each do |request| %>
+        <div data-proposal class="mt-2 space-y-1">
+          <p class="text-sm text-gray-700">ツール: <code class="rounded bg-gray-100 px-1 py-0.5"><%= request["name"] %></code></p>
+          <%= tool_arguments_list(request["arguments"] || {}) %>
+          <p class="text-sm">決定:
+            <span data-decision class="font-medium <%= request["decision"] == "approved" ? "text-green-700" : "text-amber-800" %>"><%= decision_label(request["decision"]) || "なし" %></span>
+          </p>
+        </div>
+      <% end %>
+    <% else %>
+      <p class="mt-2 text-sm text-gray-500">返金の提案なし</p>
+    <% end %>
+  </section>
+
+  <section>
+    <h2 class="text-base font-semibold text-gray-700">注文の状態</h2>
+    <% if order %>
+      <dl data-order class="mt-2 grid grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-sm">
+        <dt class="text-gray-500">注文</dt>
+        <dd class="break-words text-gray-800"><%= order["description"] %></dd>
+        <dt class="text-gray-500">状態</dt>
+        <dd class="font-medium text-gray-900"><%= order_status_label(order["status"]) %></dd>
+        <% if order["status"] == "refunded" %>
+          <dt class="text-gray-500">返金の理由</dt>
+          <dd class="break-words text-gray-800"><%= order["refund_reason"] %></dd>
+          <dt class="text-gray-500">返金日時</dt>
+          <dd class="text-gray-800"><%= format_time(order["refunded_at"] && Time.zone.parse(order["refunded_at"])) %></dd>
+        <% end %>
+      </dl>
+    <% else %>
+      <p class="mt-2 text-sm text-gray-500">注文が見つからない</p>
+    <% end %>
+  </section>
+
+  <section>
+    <h2 class="text-base font-semibold text-gray-700">顧客への回答</h2>
+    <div class="mt-2 whitespace-pre-wrap break-words leading-relaxed text-gray-900"><%= result["answer"] %></div>
+  </section>
+
+  <p class="text-sm text-gray-500">応答したモデル: <%= result["model"] %></p>
+</div>

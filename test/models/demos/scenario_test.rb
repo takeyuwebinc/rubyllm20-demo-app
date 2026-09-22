@@ -2,8 +2,42 @@ require "test_helper"
 
 module Demos
   class ScenarioTest < ActiveSupport::TestCase
+    # Stands in for a handler that stops for approval.
+    class ApprovingHandler
+      class << self
+        attr_accessor :calls
+
+        def decide(chat, tool_call_id, approved:)
+          (self.calls ||= []) << [ :decide, chat, tool_call_id, approved ]
+          :decided
+        end
+
+        def resume(chat)
+          (self.calls ||= []) << [ :resume, chat ]
+          { "answer" => "resumed" }
+        end
+      end
+    end
+
     setup do
       @config = RubyLLM::Configuration.new
+    end
+
+    test "hands a decision and a resumption to its handler" do
+      ApprovingHandler.calls = []
+      scenario = scenario(handler_name: ApprovingHandler.name)
+      chat = Chat.new
+
+      assert_equal :decided, scenario.decide(chat, "call_1", approved: false)
+      assert_equal({ "answer" => "resumed" }, scenario.resume(chat))
+      assert_equal [ [ :decide, chat, "call_1", false ], [ :resume, chat ] ], ApprovingHandler.calls
+    end
+
+    test "cannot decide or resume for a handler that does not stop for approval" do
+      scenario = scenario(handler_name: "ResponsesApi::AnswerInquiry")
+
+      assert_raises(NoMethodError) { scenario.decide(Chat.new, "call_1", approved: true) }
+      assert_raises(NoMethodError) { scenario.resume(Chat.new) }
     end
 
     test "is being prepared while it has no handler" do

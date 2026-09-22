@@ -62,6 +62,16 @@ module Demos
       assert scenario.inputs.sole.required
     end
 
+    test "never starts the refund scenario over, and takes the inquiry and the order" do
+      scenario = Catalog.scenario("approve_refund")
+
+      assert_equal ToolApproval::AnswerRefundRequest, scenario.handler
+      assert_equal false, scenario.retryable
+      assert_equal %w[inquiry order], scenario.inputs.map(&:name)
+      assert scenario.inputs.all?(&:required)
+      assert_equal "refund_decision", scenario.result_kind
+    end
+
     # Availability is judged from the providers a scenario lists, while the
     # handler reaches the provider through the model id. They must agree.
     test "lists the provider each model of an implemented scenario resolves to" do

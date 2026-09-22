@@ -11,5 +11,6 @@ Rails.application.routes.draw do
 
   resources :runs, only: %i[index show] do
     resource :status, only: :show, module: :runs
+    resource :decision, only: :create, module: :runs
   end
 end

@@ -50,4 +50,10 @@ class FailureKindsTest < ActiveSupport::TestCase
     assert_equal "ワーカーの異常終了", FailureKinds::WORKER_LOST.name
     assert_match "もう一度実行", FailureKinds::WORKER_LOST.hint
   end
+
+  test "describes a job that was put back with nothing to continue from" do
+    assert_equal "ジョブの中断", FailureKinds::INTERRUPTED.name
+    assert_match "再開できる記録がない", FailureKinds::INTERRUPTED.hint
+    assert_match "もう一度実行", FailureKinds::INTERRUPTED.hint
+  end
 end

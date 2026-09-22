@@ -9,6 +9,10 @@
     <h1 class="text-2xl font-bold"><%= run_title(@run) %></h1>
   </header>
 
+  <% if @decision_refused %>
+    <p data-decision-refused class="max-w-prose rounded-md bg-red-50 px-4 py-3 text-sm text-red-800"><%= @decision_refused %></p>
+  <% end %>
+
   <%= render "runs/details", run: @run %>
 
   <section>

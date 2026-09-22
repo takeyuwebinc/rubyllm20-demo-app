@@ -3,6 +3,7 @@ require "test_helper"
 module Demos
   class RunTest < ActiveSupport::TestCase
     include ActiveJob::TestHelper
+    include ScreenHelpers
 
     test "starts a run with the given input and queues its job" do
       run = Run.start(runnable_scenario, "inquiry" => "Where is my order?")
@@ -99,12 +100,14 @@ module Demos
     test "fails the runs a dead worker left running, and only those" do
       abandoned = create_run
       finished = create_run.tap { |run| run.succeed!({ "answer" => "done" }) }
+      awaiting = create_awaiting_run
 
-      Run.fail_abandoned!([ abandoned.id, finished.id ])
+      Run.fail_abandoned!([ abandoned.id, finished.id, awaiting.id ])
 
       assert_predicate abandoned.reload, :failed?
       assert_equal "ワーカーの異常終了", abandoned.failure["kind"]
       assert_predicate finished.reload, :succeeded?
+      assert_predicate awaiting.reload, :awaiting_approval?
     end
 
     test "lists the runs of a demo, newest first" do
@@ -120,6 +123,83 @@ module Demos
 
       assert_nil run.scenario
       assert_predicate run.reload, :persisted?
+    end
+
+    test "stops for approval with the chat and what it asked" do
+      chat = create_refund_chat
+      create_pending_refund_call(chat, tool_call_id: "call_1", order_id: 7, reason: "商品が破損していた")
+      run = create_run
+
+      run.await_approval!(ToolApproval::AnswerRefundRequest::RefundAgent.find(chat.id))
+
+      assert_predicate run.reload, :awaiting_approval?
+      assert_equal chat.id, run.chat_id
+      assert_equal [ {
+        "tool_call_id" => "call_1", "name" => "issue_refund",
+        "arguments" => { "order_id" => 7, "reason" => "商品が破損していた" }, "decision" => nil
+      } ], run.approval_requests
+    end
+
+    test "keeps the decision and continues" do
+      run = create_awaiting_run
+
+      run.resume!("call_1", "approved")
+
+      assert_predicate run.reload, :running?
+      assert_equal "approved", run.approval_requests.sole["decision"]
+      assert_enqueued_with(job: RunJob, args: [ run ])
+    end
+
+    test "refuses to continue on a request it never made" do
+      run = create_awaiting_run
+
+      assert_raises(ArgumentError) { run.resume!("call_9", "approved") }
+
+      assert_predicate run.reload, :awaiting_approval?
+      assert_nil run.approval_requests.sole["decision"]
+      assert_no_enqueued_jobs
+    end
+
+    test "keeps earlier requests and their decisions when it stops again" do
+      chat = create_refund_chat
+      run = create_awaiting_run(chat: chat, tool_call_id: "call_1")
+      ToolApproval::AnswerRefundRequest.decide(Chat.find(chat.id), "call_1", approved: true)
+      run.resume!("call_1", "approved")
+      create_pending_refund_call(chat, tool_call_id: "call_2", order_id: 8)
+
+      run.await_approval!(ToolApproval::AnswerRefundRequest::RefundAgent.find(chat.id))
+
+      assert_equal [ [ "call_1", "approved" ], [ "call_2", nil ] ],
+        run.reload.approval_requests.map { |request| request.values_at("tool_call_id", "decision") }
+    end
+
+    test "refuses to stop for approval with nothing to decide" do
+      chat = create_refund_chat
+      run = create_run
+
+      assert_raises(ArgumentError) { run.await_approval!(ToolApproval::AnswerRefundRequest::RefundAgent.find(chat.id)) }
+
+      assert_predicate run.reload, :running?
+      assert_nil run.chat_id
+    end
+
+    test "never stops a finished run for approval" do
+      chat = create_refund_chat
+      create_pending_refund_call(chat)
+      run = create_run.tap { |r| r.succeed!({ "answer" => "done" }) }
+
+      assert_raises(ActiveRecord::RecordInvalid) { run.await_approval!(ToolApproval::AnswerRefundRequest::RefundAgent.find(chat.id)) }
+      assert_predicate run.reload, :succeeded?
+    end
+
+    test "fails for a reason that is not a provider error" do
+      run = create_run
+
+      run.fail_as!(FailureKinds::INTERRUPTED)
+
+      assert_predicate run.reload, :failed?
+      assert_equal "ジョブの中断", run.failure["kind"]
+      assert_match "もう一度実行", run.failure["hint"]
     end
 
     private

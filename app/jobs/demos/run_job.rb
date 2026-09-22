@@ -25,23 +25,32 @@ module Demos
       end
     end
 
+    # A run waiting for approval is left alone: the decision queues the job
+    # that continues it.
     def perform(run)
-      return if run.finished?
+      return if run.finished? || run.awaiting_approval?
 
       scenario = run.scenario or raise ArgumentError, "Scenario #{run.scenario_key} is not defined"
+      # A run that stopped for approval continues its chat, whose records
+      # hold how far it got, so this is safe however often the job runs.
+      chat = Chat.find(run.chat_id) if run.chat_id
       # Solid Queue puts a job back in the queue when its worker stops
-      # gracefully. Starting over would repeat what the first attempt did.
-      # TODO(when the first scenario with retryable: false is implemented):
-      # the run is left running here; that scenario decides how to resume or
-      # fail it.
-      return if run.started_at && !scenario.retryable
-
-      run.update!(started_at: Time.current)
-      result = RubyLLM.workflow(workflow_name(scenario), metadata: { conversation_id: run.conversation_id }) do
-        record_trace(run)
-        scenario.perform(run.input)
+      # gracefully. A scenario that must not start over, and has no chat to
+      # continue, has nothing to go on with.
+      # TODO(when the first scenario that leaves work with the provider is
+      # implemented, F4, F6b, or F8): continue from the provider-side record
+      # the same way a chat is continued, instead of failing.
+      if run.started_at && !scenario.retryable && !chat
+        run.fail_as!(FailureKinds::INTERRUPTED)
+        return
       end
-      run.succeed!(result)
+
+      run.update!(started_at: Time.current) unless chat
+      outcome = RubyLLM.workflow(workflow_name(scenario), metadata: { conversation_id: run.conversation_id }) do
+        record_trace(run)
+        chat ? scenario.resume(chat) : scenario.perform(run.input)
+      end
+      record(run, outcome)
     rescue StandardError => error
       run.fail_with!(error)
       # A provider failure is shown on the run page with its likely causes.
@@ -62,6 +71,16 @@ module Demos
     def record_trace(run)
       span_context = OpenTelemetry::Trace.current_span.context
       run.add_trace_id!(span_context.hex_trace_id) if span_context.valid?
+    end
+
+    # A scenario hands back its result, or the chat it stopped on for a
+    # person's approval.
+    def record(run, outcome)
+      if outcome.is_a?(Chat)
+        run.await_approval!(outcome)
+      else
+        run.succeed!(outcome)
+      end
     end
   end
 end

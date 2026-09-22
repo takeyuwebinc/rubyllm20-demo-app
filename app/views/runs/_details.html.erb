@@ -17,6 +17,30 @@
     <% end %>
   </div>
 
+  <% if run.awaiting_approval? %>
+    <section data-approval class="max-w-prose space-y-4 rounded-md border border-amber-200 bg-amber-50 p-4">
+      <h2 class="font-semibold text-amber-900">AI がツールの実行を提案している</h2>
+      <% run.approval_requests.each do |request| %>
+        <div data-approval-request="<%= request["tool_call_id"] %>" class="space-y-3 rounded-md bg-white p-4 ring-1 ring-amber-600/20">
+          <p class="text-sm text-gray-700">ツール: <code class="rounded bg-gray-100 px-1 py-0.5"><%= request["name"] %></code></p>
+          <%= tool_arguments_list(request["arguments"] || {}) %>
+          <% if request["decision"] %>
+            <p class="text-sm font-medium text-gray-900">決定: <%= decision_label(request["decision"]) %></p>
+          <% else %>
+            <div class="flex flex-wrap items-center gap-3">
+              <%= button_to "承認する", run_decision_path(run), params: { tool_call_id: request["tool_call_id"], decision: "approve" }, class: "btn-primary" %>
+              <%= button_to "却下する", run_decision_path(run), params: { tool_call_id: request["tool_call_id"], decision: "deny" }, class: "btn-secondary" %>
+            </div>
+          <% end %>
+        </div>
+      <% end %>
+      <p class="text-sm text-amber-900">
+        承認するとツールが実行され、AI はその結果を踏まえて続きを実行する。却下するとツールは実行されず、AI は却下を踏まえて応答する。
+        画面を離れても、履歴からこの実行を開いて決められる。
+      </p>
+    </section>
+  <% end %>
+
   <% if run.succeeded? %>
     <% result_kind = run.scenario&.result_kind || "raw" %>
     <%= render "runs/results/#{result_kind}", run: run %>

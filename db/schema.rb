@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_09_22_063741) do
+ActiveRecord::Schema[8.1].define(version: 2026_09_22_120001) do
   create_table "active_storage_attachments", force: :cascade do |t|
     t.bigint "blob_id", null: false
     t.datetime "created_at", null: false
@@ -48,6 +48,8 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_22_063741) do
   end
 
   create_table "demo_runs", force: :cascade do |t|
+    t.json "approval_requests", default: [], null: false
+    t.integer "chat_id"
     t.string "conversation_id", null: false
     t.datetime "created_at", null: false
     t.json "failure"
@@ -59,6 +61,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_22_063741) do
     t.string "status", default: "running", null: false
     t.json "trace_ids", default: [], null: false
     t.datetime "updated_at", null: false
+    t.index ["chat_id"], name: "index_demo_runs_on_chat_id"
     t.index ["conversation_id"], name: "idx_demo_runs_conversation_id", unique: true
   end
 
@@ -165,8 +168,18 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_22_063741) do
     t.check_constraint "status IN ('pending', 'succeeded', 'failed', 'cancelled')"
   end
 
+  create_table "shop_orders", force: :cascade do |t|
+    t.datetime "created_at", null: false
+    t.text "description", null: false
+    t.text "refund_reason"
+    t.datetime "refunded_at"
+    t.string "status", default: "paid", null: false
+    t.datetime "updated_at", null: false
+  end
+
   add_foreign_key "active_storage_attachments", "active_storage_blobs", column: "blob_id"
   add_foreign_key "active_storage_variant_records", "active_storage_blobs", column: "blob_id"
   add_foreign_key "chats", "ruby_llm_models"
+  add_foreign_key "demo_runs", "chats"
   add_foreign_key "messages", "chats"
 end
