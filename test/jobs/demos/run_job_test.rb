@@ -14,6 +14,25 @@ module Demos
       end
     end
 
+    # Answers each question with the next scripted answer, in place of a chat
+    # with a provider, and keeps the questions it was asked.
+    class ScriptedChat
+      attr_reader :questions
+
+      def initialize(*answers)
+        @answers = answers
+        @questions = []
+      end
+
+      def with_instructions(_instructions) = self
+      def with_schema(_schema) = self
+
+      def ask(question)
+        @questions << question
+        @answers.fetch(@questions.size - 1).call
+      end
+    end
+
     setup do
       FakeHandler.calls = []
       FakeHandler.outcome = { "answer" => "Your order ships tomorrow." }
@@ -40,6 +59,7 @@ module Demos
       assert_no_error_reported { perform }
 
       assert_predicate @run.reload, :failed?
+      assert_nil @run.result
       assert_equal "認証の失敗", @run.failure["kind"]
       assert_equal "Incorrect API key provided", @run.failure["message"]
     end
@@ -59,6 +79,23 @@ module Demos
 
       assert_predicate @run.reload, :failed?
       assert_equal "NoMethodError", @run.failure["kind"]
+    end
+
+    test "fails a ticket workflow run whose step fails, and asks nothing after that step" do
+      run = Run.create!(scenario_key: "run_ticket_workflow", input: { "ticket" => "電気ケトルの電源が入りません。" })
+      chat = ScriptedChat.new(
+        -> { RubyLLM::Message.new(role: :assistant, content: '{"category":"商品の不具合","reason":"電源が入らないため"}', model: "gpt-5-nano") },
+        -> { raise RubyLLM::RateLimitError, "Rate limit reached" }
+      )
+
+      with_chat(chat) do
+        assert_no_error_reported { RunJob.perform_now(run) }
+      end
+
+      assert_predicate run.reload, :failed?
+      assert_nil run.result
+      assert_equal "RubyLLM::RateLimitError", run.failure["error_class"]
+      assert_equal 2, chat.questions.size, "the review step must not ask after the draft step failed"
     end
 
     test "does nothing for a finished run" do
@@ -144,6 +181,14 @@ module Demos
       )
       @run.define_singleton_method(:scenario) { scenario }
       RunJob.perform_now(@run)
+    end
+
+    def with_chat(chat)
+      original = RubyLLM.method(:chat)
+      RubyLLM.define_singleton_method(:chat) { |**| chat }
+      yield
+    ensure
+      RubyLLM.define_singleton_method(:chat, original)
     end
   end
 end

@@ -25,7 +25,9 @@ module Observability
       batch compaction moderation ocr rerank research_job tokenization transcription video_job
     ].to_h { |operation| [ "#{operation}.ruby_llm", operation ] }.freeze
 
-    Entry = Struct.new(:span, :token)
+    # conversation_id is the one a workflow names in its own metadata. It is
+    # kept for as long as the workflow is open, so that inner events can use it.
+    Entry = Struct.new(:span, :token, :conversation_id, keyword_init: true)
 
     def initialize(tracer:, capture_content:)
       @tracer = tracer
@@ -57,15 +59,19 @@ module Observability
       Thread.current[@stack_key] ||= []
     end
 
+    # The conversation is recorded even when the span cannot be opened, so the
+    # workflow's inner events still join it.
     def open_entry(name, payload)
+      conversation_id = own_conversation_id(payload) if name == "workflow.ruby_llm"
       span_name = span_name_for(name, payload)
-      return Entry.new unless span_name
+      return Entry.new(conversation_id:) unless span_name
 
       span = @tracer.start_span(span_name, kind: name == "request.ruby_llm" ? :client : :internal)
-      Entry.new(span, OpenTelemetry::Context.attach(OpenTelemetry::Trace.context_with_span(span)))
+      token = OpenTelemetry::Context.attach(OpenTelemetry::Trace.context_with_span(span))
+      Entry.new(span:, token:, conversation_id:)
     rescue StandardError => error
       report(error)
-      Entry.new
+      Entry.new(conversation_id:)
     end
 
     def close_entry(entry, name, payload)
@@ -228,14 +234,31 @@ module Observability
     def correlation_attributes(name, payload)
       return {} if name == "request.ruby_llm"
 
-      metadata = payload[:workflow_metadata] || {}
-      conversation_id = metadata[:conversation_id] || metadata["conversation_id"]
+      conversation_id = own_conversation_id(payload) || enclosing_conversation_id
       {
         "gen_ai.agent.name" => payload[:workflow_name]&.to_s,
         # Sentry uses the id as a URL path segment, so a slash would break the
         # Conversations view.
         "gen_ai.conversation.id" => conversation_id&.to_s&.gsub(/[^A-Za-z0-9_-]/, "_").presence
       }
+    end
+
+    def own_conversation_id(payload)
+      metadata = payload[:workflow_metadata]
+      metadata[:conversation_id] || metadata["conversation_id"] if metadata.is_a?(Hash)
+    end
+
+    # RubyLLM gives the events of a workflow opened inside another only the
+    # inner workflow's own metadata. Code that opens a workflow without
+    # metadata, inside one that names a conversation, still belongs to that
+    # conversation, so the innermost open workflow that names one decides.
+    # A finished workflow's entry is gone from the stack and decides nothing.
+    #
+    # The rule lives here so that such code stays ordinary RubyLLM code that
+    # knows nothing of the conversation. If it breaks, runs still succeed;
+    # only their grouping into conversations in the backend suffers.
+    def enclosing_conversation_id
+      stack.reverse_each.lazy.filter_map(&:conversation_id).first
     end
 
     # OTLP backends may drop span events (Sentry does), which is where

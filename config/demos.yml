@@ -142,11 +142,37 @@
 - key: workflow-instrumentation
   name: Workflow Instrumentation
   summary: 複数のステップからなる処理で、どのステップが時間とコストを使っているかを特定したい
+  useful_cases: |-
+    分類、回答の下書き、レビューのように、モデルを何度も呼ぶ処理で、どのステップが時間とコストを使っているかを知りたい場合に役立つ。`RubyLLM.workflow` のブロックの内側で発行される計装イベントには、workflow の ID と名前が付く。`workflow.step` のブロックの内側なら、ステップの ID と名前も付く。workflow とステップ自身も、ブロックの前後で計装イベントを発行するので、ステップごとの所要時間が分かる。
+
+    処理の流れは、通常の Ruby のまま書ける。`RubyLLM.workflow` と `step` は計装イベントに識別子を付けるだけで、処理の実行を引き受けない。条件分岐や繰り返しも、そのまま Ruby で書く。`metadata:` に渡した値（利用者や実行の ID など）は、その workflow のイベントに `workflow_metadata` として載る。
+
+    workflow は入れ子にできる。内側の workflow は自分の ID と名前を持ち、イベントに外側の workflow の ID を載せる。そのため、自分の workflow を開くクラスを、より大きな workflow から呼ぶと、内側が部分木として現れる。このデモでも、実行のジョブが開いた workflow の中で、下のコードの workflow が入れ子になる。
+
+    Rails では、計装イベントは ActiveSupport::Notifications で発行される。購読者を書けば、OpenTelemetry のスパンなど、使っている観測の仕組みの形にして送れる。このアプリでは、購読者がスパンにして Sentry に送っている。
+  without_it: |-
+    計装イベントが、どの処理のどの段階で発行されたものか分からない。同じモデルを 3 回呼ぶ処理では、3 つの chat のイベントは、モデルもプロバイダーも同じで、見分けがつかない。
+
+    段階ごとの所要時間、トークン数、コストを知るには、段階の境目で時刻を測って集計する仕組みと、処理を識別する値を呼び出しごとに引き回す仕組みを、自分で書いて保守することになる。
   sources:
-    - title: Instrumentation and Observability（RubyLLM）
-      url: https://rubyllm.com/instrumentation/
-    - title: Agentic Workflows（RubyLLM）
+    - title: Instrumentation and Observability（RubyLLM）— workflow とステップがイベントに付ける情報と、入れ子の扱い
+      url: https://rubyllm.com/instrumentation/#workflows-and-steps
+    - title: Agentic Workflows（RubyLLM）— workflow とステップが処理の実行を引き受けないこと
       url: https://rubyllm.com/agentic-workflows/
   scenarios:
     - key: run_ticket_workflow
       name: チケットの分類、回答の下書き、レビューを順に行う
+      handler: WorkflowInstrumentation::RunTicketWorkflow
+      providers: [openai]
+      # One model for every step, so the steps differ in tokens only because
+      # their work differs.
+      models:
+        model: gpt-5-nano
+      inputs:
+        - name: ticket
+          label: サポートチケット
+          required: true
+          default: |-
+            先週届いた電気ケトル（注文番号 B-20517）の電源が入りません。コンセントを差し替えても、ランプが点きません。交換してもらえますか。それとも修理に出す必要がありますか。
+      result_kind: ticket_workflow
+      retryable: true
