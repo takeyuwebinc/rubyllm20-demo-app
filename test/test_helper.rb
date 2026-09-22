@@ -7,6 +7,13 @@ require_relative "support/screen_helpers"
 # independent of the developer's .env, and fails any call that slips through.
 RubyLLM.config.openai_api_key = "sk-test"
 
+# RubyLLM reads its model registry once per process, from the
+# ruby_llm_models table, and falls back to the registry bundled with the gem
+# while the table is empty. Some tests create a single model record; a
+# registry first read inside one of them would know no other model. It is
+# read here, before any test, and the parallel workers inherit it.
+RubyLLM.models
+
 module ActiveSupport
   class TestCase
     # Run tests in parallel with specified workers
