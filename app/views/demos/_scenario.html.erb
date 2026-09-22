@@ -1,0 +1,58 @@
+<% availability = scenario.availability %>
+<% refused_run = refused_run_for(scenario) %>
+
+<section id="<%= scenario.key %>" class="space-y-5 rounded-lg border border-gray-200 bg-white p-6">
+  <div class="flex items-start justify-between gap-4">
+    <h2 class="text-lg font-semibold"><%= scenario.name %></h2>
+    <%= availability_badge(availability) %>
+  </div>
+
+  <% if availability.preparing? %>
+    <p class="text-sm text-gray-600">この代表シナリオは準備中である。</p>
+  <% else %>
+    <% if refused_run&.errors&.[](:base)&.any? %>
+      <p data-scenario-error class="max-w-prose rounded-md bg-red-50 px-4 py-3 text-sm text-red-800">
+        <%= refused_run.errors[:base].join("。") %>
+      </p>
+    <% end %>
+
+    <% if availability.missing_config? %>
+      <p class="max-w-prose rounded-md bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        <%= provider_names(availability.missing_providers) %> の設定値が足りないため、実行できない。
+        取得手順は <code>docs/api-keys.md</code>、疎通確認は <code>bin/check_keys</code> にある。
+      </p>
+    <% end %>
+
+    <div class="space-y-6 xl:grid xl:grid-cols-5 xl:gap-8 xl:space-y-0">
+      <div class="min-w-0 xl:col-span-3">
+        <p class="text-xs text-gray-500"><%= scenario.source_path %></p>
+        <pre class="mt-1 overflow-x-auto rounded-md bg-gray-900 p-4 text-xs leading-relaxed text-gray-100"><code><%= scenario.source_code %></code></pre>
+      </div>
+
+      <%= form_with url: demo_runs_path(demo.key), scope: :run, class: "max-w-xl space-y-4 xl:col-span-2" do |form| %>
+        <%= form.hidden_field :scenario_key, value: scenario.key %>
+        <% values = input_values_for(scenario) %>
+
+        <% scenario.inputs.each do |input| %>
+          <% field_id = "#{scenario.key}_#{input.name}" %>
+          <% errors = refused_run&.input_errors(input.name) || [] %>
+          <div>
+            <%= label_tag field_id, input.label, class: "block text-sm font-medium text-gray-700" %>
+            <%= text_area_tag "run[input][#{input.name}]", values[input.name], id: field_id, rows: 5,
+                  class: "mt-1 block w-full rounded-md border px-3 py-2 text-sm shadow-sm focus:outline-2 focus:outline-indigo-600 #{errors.any? ? "border-red-400" : "border-gray-300"}" %>
+            <% errors.each do |message| %>
+              <p data-input-error="<%= input.name %>" class="mt-1 text-sm text-red-700"><%= message %></p>
+            <% end %>
+          </div>
+        <% end %>
+
+        <p class="text-xs text-gray-500">入力の本文は Sentry に送られる。実データと個人情報を入れないこと。</p>
+
+        <div class="flex items-center gap-3">
+          <%= form.submit "実行する", class: "btn-primary", disabled: !availability.runnable? %>
+          <%= link_to "入力を既定に戻す", demo_path(demo.key, anchor: scenario.key), class: "btn-secondary" %>
+        </div>
+      <% end %>
+    </div>
+  <% end %>
+</section>

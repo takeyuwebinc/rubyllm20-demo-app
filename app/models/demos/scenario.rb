@@ -45,6 +45,17 @@ module Demos
       inputs.select(&:required).map(&:name).select { |name| values[name].blank? }
     end
 
+    # The handler's source file, relative to the app root. It is read on every
+    # display, so the code shown is always the code that runs.
+    def source_path
+      path = Object.const_source_location(handler.name)&.first
+      Pathname(path).relative_path_from(Rails.root).to_s if path
+    end
+
+    def source_code
+      File.read(Rails.root.join(source_path))
+    end
+
     # Calls the handler with each input and each model as a keyword, so the
     # handler reads like ordinary RubyLLM code with nothing of this app in it.
     def perform(input)

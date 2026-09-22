@@ -34,7 +34,7 @@ module Demos
       run = assert_no_difference(-> { Run.count }) { Run.start(runnable_scenario, "inquiry" => "  ") }
 
       refute_predicate run, :persisted?
-      assert_predicate run.errors[:"input.inquiry"], :any?
+      assert_predicate run.input_errors("inquiry"), :any?
       assert_no_enqueued_jobs
     end
 

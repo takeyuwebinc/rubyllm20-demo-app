@@ -62,6 +62,13 @@ module Demos
       assert_equal({ "inquiry" => "Where is my order?" }, scenario.input_values({}))
     end
 
+    test "reads the source of its handler, where the code it runs lives" do
+      scenario = Catalog.scenario("answer_inquiry")
+
+      assert_equal "app/actions/responses_api/answer_inquiry.rb", scenario.source_path
+      assert_includes scenario.source_code, "class AnswerInquiry"
+    end
+
     private
 
     def scenario(**overrides)

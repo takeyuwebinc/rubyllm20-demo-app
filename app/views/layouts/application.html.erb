@@ -1,18 +1,15 @@
 <!DOCTYPE html>
-<html>
+<html lang="ja">
   <head>
-    <title><%= content_for(:title) || "Rubyllm20 Demo App" %></title>
+    <title><%= [ content_for(:title), "RubyLLM 2.0 新機能デモ" ].compact.join(" | ") %></title>
     <meta name="viewport" content="width=device-width,initial-scale=1">
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="application-name" content="Rubyllm20 Demo App">
+    <meta name="application-name" content="RubyLLM 2.0 新機能デモ">
     <meta name="mobile-web-app-capable" content="yes">
     <%= csrf_meta_tags %>
     <%= csp_meta_tag %>
 
     <%= yield :head %>
-
-    <%# Enable PWA manifest for installable apps (make sure to enable in config/routes.rb too!) %>
-    <%#= tag.link rel: "manifest", href: pwa_manifest_path(format: :json) %>
 
     <link rel="icon" href="/icon.png" type="image/png">
     <link rel="icon" href="/icon.svg" type="image/svg+xml">
@@ -23,8 +20,17 @@
     <%= javascript_importmap_tags %>
   </head>
 
-  <body>
-    <main class="container mx-auto mt-28 px-5 flex">
+  <body class="bg-gray-50 text-gray-900">
+    <header class="border-b border-gray-200 bg-white">
+      <div class="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
+        <%= link_to "RubyLLM 2.0 新機能デモ", root_path, class: "font-semibold text-gray-900" %>
+        <nav>
+          <%= link_to "履歴", runs_path, class: "text-sm font-medium text-gray-700 hover:text-gray-900" %>
+        </nav>
+      </div>
+    </header>
+
+    <main class="mx-auto max-w-6xl px-4 py-8">
       <%= yield %>
     </main>
   </body>

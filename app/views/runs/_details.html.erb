@@ -1,0 +1,61 @@
+<%# The part of the run page that changes while the run is in progress. %>
+<div id="run_details" class="space-y-6"
+     data-controller="poll"
+     data-poll-url-value="<%= run_status_path(run) %>"
+     data-poll-active-value="<%= run.running? %>">
+  <div>
+    <div class="flex items-center gap-3">
+      <%= run_status_badge(run, size: :large) %>
+      <% if run.running? %>
+        <span class="text-sm text-gray-600">実行を指示してから <%= (Time.current - run.created_at).to_i %> 秒</span>
+      <% end %>
+    </div>
+    <% if run.running? %>
+      <p class="mt-2 max-w-prose text-sm text-gray-500">
+        進まない場合は、ジョブのワーカーが動いているかを確かめる。<code>bin/dev</code> で起動すると、Web のサーバーと一緒に動く。
+      </p>
+    <% end %>
+  </div>
+
+  <% if run.succeeded? %>
+    <% result_kind = run.scenario&.result_kind || "raw" %>
+    <%= render "runs/results/#{result_kind}", run: run %>
+  <% end %>
+
+  <% if run.failed? %>
+    <% failure = run.failure || {} %>
+    <section data-failure class="max-w-prose rounded-md border border-red-200 bg-red-50 p-4">
+      <p class="font-semibold text-red-800">
+        <%= failure["kind"] %><% if failure["provider"].present? %>（<%= failure["provider"] %>）<% end %>
+      </p>
+      <% if failure["message"].present? %>
+        <p class="mt-2 whitespace-pre-wrap break-words text-sm text-red-900"><%= failure["message"] %></p>
+      <% end %>
+      <% if failure["hint"].present? %>
+        <p class="mt-2 text-sm text-gray-700">原因の候補: <%= failure["hint"] %></p>
+      <% end %>
+    </section>
+  <% end %>
+
+  <% if sentry_links.available? %>
+    <div class="flex flex-wrap items-center gap-3">
+      <% newest, *older = run.trace_ids.reverse %>
+      <% if newest %>
+        <%= link_to "Sentry でトレースを開く", sentry_trace_url(run, newest), target: "_blank", rel: "noopener", class: "btn-primary" %>
+      <% end %>
+      <%= link_to "Sentry で会話を開く", sentry_conversation_url(run), target: "_blank", rel: "noopener", class: "btn-secondary" %>
+      <% older.each.with_index(1) do |trace_id, index| %>
+        <%= link_to "以前のトレース #{index}", sentry_trace_url(run, trace_id), target: "_blank", rel: "noopener", class: "btn-secondary" %>
+      <% end %>
+    </div>
+  <% else %>
+    <p class="text-sm text-gray-500">Sentry へのリンクには、<code>.env</code> の <code>SENTRY_ORG</code> と <code>SENTRY_DSN</code> が要る。</p>
+  <% end %>
+
+  <dl class="grid max-w-xl grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-sm">
+    <dt class="text-gray-500">実行日時</dt>
+    <dd class="text-gray-800"><%= format_time(run.created_at) %></dd>
+    <dt class="text-gray-500">終了日時</dt>
+    <dd class="text-gray-800"><%= format_time(run.finished_at) || "—" %></dd>
+  </dl>
+</div>

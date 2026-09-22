@@ -11,7 +11,7 @@
 
 | 取得順 | サービス | `.env` の変数 | 使うデモ |
 |---|---|---|---|
-| 0 | Sentry | `SENTRY_DSN` | 全デモ。試行ごとの観察情報を確認する（エージェントトレーシング） |
+| 0 | Sentry | `SENTRY_DSN`, `SENTRY_ORG` | 全デモ。試行ごとの観察情報を確認する（エージェントトレーシング）。`SENTRY_ORG` は、実行の画面から Sentry へ移動するリンクに使う |
 | 1 | OpenAI | `OPENAI_API_KEY` | Responses API / Tool Approval / Batches / Model Fallbacks（主系）/ Speech / Provider Tools / `count_tokens` / Workflow Instrumentation |
 | 2 | Anthropic | `ANTHROPIC_API_KEY` | Citations / Model Fallbacks（切替先） |
 | 3 | xAI | `XAI_API_KEY` | Video Generation / `RubyLLM.tokenize` |
@@ -132,6 +132,7 @@ RubyLLM::RateLimitError: Quota exceeded for quota metric
 1. sentry.io の組織で、プロジェクトを新規作成する。プラットフォームは Rails を選ぶ。
 2. 作成直後の画面に表示される DSN を控える。後から確認する場合は、プロジェクトの設定の Client Keys (DSN) にある。
 3. `.env` の `SENTRY_DSN=` に貼り付ける。
+4. 組織の識別子（Organization Slug）を `.env` の `SENTRY_ORG=` に書く。Sentry の画面の URL `https://<組織の識別子>.sentry.io/` の先頭の部分である。DSN には含まれないため、別に設定する。未設定でも計装は動くが、実行の画面に Sentry へのリンクが出ない。
 
 注意点:
 

@@ -39,13 +39,17 @@ module Demos
         scenario.blank_required_inputs(run.input).each do |name|
           # A message rather than an error type: generating a message from a
           # type reads the attribute, and the run has no attribute per input.
-          run.errors.add(:"input.#{name}", "入力してください")
+          run.errors.add(input_error_key(name), "入力してください")
         end
         return run if run.errors.any?
 
         run.save!
         RunJob.perform_later(run)
         run
+      end
+
+      def input_error_key(name)
+        :"input.#{name}"
       end
 
       def transition?(from, to)
@@ -82,6 +86,10 @@ module Demos
 
     def finished?
       FINISHED.include?(status)
+    end
+
+    def input_errors(name)
+      errors[self.class.input_error_key(name)]
     end
 
     def succeed!(result)

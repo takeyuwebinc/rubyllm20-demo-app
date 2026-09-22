@@ -1,0 +1,59 @@
+<% content_for :title, @demo.name %>
+
+<div class="space-y-10">
+  <header>
+    <h1 class="text-2xl font-bold"><%= @demo.name %></h1>
+    <% if @demo.official_name %>
+      <p class="mt-1 text-sm text-gray-500">RubyLLM の公式ドキュメントでの名称: <%= @demo.official_name %></p>
+    <% end %>
+  </header>
+
+  <section class="max-w-prose space-y-6">
+    <% if @demo.described? %>
+      <div>
+        <h2 class="text-lg font-semibold">役立つケース</h2>
+        <%= explanation(@demo.useful_cases, css_class: "mt-2 leading-relaxed text-gray-800") %>
+      </div>
+      <div>
+        <h2 class="text-base font-semibold text-gray-700">使わない場合に困ること</h2>
+        <%= explanation(@demo.without_it, css_class: "mt-2 text-sm leading-relaxed text-gray-600") %>
+      </div>
+    <% else %>
+      <div>
+        <p class="leading-relaxed text-gray-800"><%= @demo.summary %></p>
+        <p class="mt-2 text-sm text-gray-500">説明は、この機能の代表シナリオとあわせて用意する。</p>
+      </div>
+    <% end %>
+
+    <div>
+      <h2 class="text-sm font-semibold text-gray-700">出典</h2>
+      <ul class="mt-2 space-y-1">
+        <% @demo.sources.each do |source| %>
+          <li><%= link_to source.title, source.url, target: "_blank", rel: "noopener", class: "link-quiet" %></li>
+        <% end %>
+      </ul>
+    </div>
+  </section>
+
+  <% @demo.scenarios.each do |scenario| %>
+    <%= render "demos/scenario", demo: @demo, scenario: scenario %>
+  <% end %>
+
+  <section>
+    <h2 class="text-base font-semibold text-gray-700">このデモの最近の実行</h2>
+    <% if @recent_runs.any? %>
+      <ul class="mt-3 max-w-xl divide-y divide-gray-200 rounded-lg border border-gray-200 bg-white">
+        <% @recent_runs.each do |run| %>
+          <li>
+            <%= link_to run_path(run), class: "flex items-center justify-between gap-4 px-4 py-3 text-sm hover:bg-gray-50" do %>
+              <%= run_status_badge(run) %>
+              <span class="text-gray-600"><%= format_time(run.created_at) %></span>
+            <% end %>
+          </li>
+        <% end %>
+      </ul>
+    <% else %>
+      <p class="mt-2 text-sm text-gray-500">まだ実行がない。</p>
+    <% end %>
+  </section>
+</div>
