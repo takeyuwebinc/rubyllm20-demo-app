@@ -2,10 +2,16 @@ module WorkflowInstrumentation
   # Answers a support ticket in three steps: classify it, draft a reply, and
   # review the draft.
   #
+  # It opens its own workflow instead of taking one from its caller, so the
+  # code shows both RubyLLM.workflow and step. Run inside a larger workflow,
+  # such as a job's, it appears there as a sub-tree.
+  #
   # Each step calls the model once, on a chat of its own. The step's span and
   # the chat span inside it then report the same time, tokens, and cost, and
   # an earlier step's messages do not inflate a later step's input.
   class RunTicketWorkflow < ApplicationAction
+    # Categories and verdicts are stored and shown as these words, so no
+    # table of labels has to be kept in step with the result's display.
     CATEGORIES = %w[配送 返品・返金 商品の不具合 支払い その他].freeze
     PASSED = "合格".freeze
     NEEDS_REVISION = "要修正".freeze

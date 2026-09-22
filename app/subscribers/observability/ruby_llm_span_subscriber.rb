@@ -253,6 +253,10 @@ module Observability
     # metadata, inside one that names a conversation, still belongs to that
     # conversation, so the innermost open workflow that names one decides.
     # A finished workflow's entry is gone from the stack and decides nothing.
+    #
+    # The rule lives here so that such code stays ordinary RubyLLM code that
+    # knows nothing of the conversation. If it breaks, runs still succeed;
+    # only their grouping into conversations in the backend suffers.
     def enclosing_conversation_id
       stack.reverse_each.lazy.filter_map(&:conversation_id).first
     end
