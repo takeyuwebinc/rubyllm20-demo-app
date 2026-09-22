@@ -6,6 +6,9 @@ Rails.application.configure do
   # Make code changes take effect immediately without server restart.
   config.enable_reloading = true
 
+  # The demo catalog is data, not code; editing it should reload like code.
+  config.watchable_files << Rails.root.join("config/demos.yml").to_s
+
   # Do not eager load code on boot.
   config.eager_load = false
 
@@ -54,6 +57,12 @@ Rails.application.configure do
 
   # Highlight code that enqueued background job in logs.
   config.active_job.verbose_enqueue_logs = true
+
+  # Jobs run in a separate worker process, from a database-backed queue. The
+  # default in-process adapter would lose queued jobs on every code reload and
+  # server restart.
+  config.active_job.queue_adapter = :solid_queue
+  config.solid_queue.connects_to = { database: { writing: :queue } }
 
   # Highlight code that triggered redirect in logs.
   config.action_dispatch.verbose_redirect_logs = true

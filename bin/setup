@@ -24,6 +24,12 @@ FileUtils.chdir APP_ROOT do
   system! "bin/rails db:prepare"
   system! "bin/rails db:reset" if ARGV.include?("--reset")
 
+  # The model registry bundled with the pinned ruby_llm gem, copied into
+  # ruby_llm_models. Rows are upserted by model id and provider, so repeated
+  # runs are safe.
+  puts "\n== Loading the RubyLLM model registry =="
+  system! "bin/rails ruby_llm:load_models"
+
   puts "\n== Removing old logs and tempfiles =="
   system! "bin/rails log:clear tmp:clear"
 

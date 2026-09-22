@@ -1,0 +1,152 @@
+# The ten RubyLLM 2.0 features, in the order of the requirements.
+#
+# Every demo has a one-line summary and at least one source in the RubyLLM
+# documentation. useful_cases and without_it are written together, when the
+# feature's scenario is implemented and can be checked against the gem source.
+#
+# A scenario with no handler is being prepared. An implemented scenario lists
+# its providers (used to tell whether it can run), its models by the keyword
+# the handler takes, its inputs, how to show its result, and whether a job
+# that runs again may start it over (retryable). A scenario that submits work
+# to the provider, or does something that cannot be undone, is not retryable:
+# starting over would submit the work twice or do it again.
+#
+# Inputs are sent to Sentry with the prompt. Keep every default fictional.
+
+- key: responses-api
+  name: Responses API
+  summary: 推論、ツール、プロバイダー側のツールを 1 回の問い合わせで扱いたい
+  useful_cases: |-
+    OpenAI のモデルで、推論、ツールの呼び出し、Web 検索のようなプロバイダー側のツールを、1 回の問い合わせの中で組み合わせたい場合に役立つ。Responses API では、モデルが 1 回の API リクエストの中で、自前のツールとプロバイダー側のツールを含む複数のツールを呼べる。OpenAI は、新しく作るものには Chat Completions より Responses API を勧めている。
+
+    RubyLLM 2.0 は、OpenAI のモデルへの問い合わせを、既定で Responses API で送る。アプリのコードは `RubyLLM.chat(model:).ask` のままでよい。ただし、音声、リアルタイム、検索用のモデルは、Chat Completions で送る。
+  without_it: |-
+    Chat Completions で送り続けると、GPT-5.4 以降のモデルでは、推論の強さ（reasoning_effort）を none 以外にしたままツールを呼べない。推論とツールのどちらかを諦めることになる。
+
+    Responses API を自前で呼ぶ場合は、入出力の形が Chat Completions と違うことに対応する必要がある。Responses API の入出力は、推論、ツールの呼び出し、その結果を別々の項目として持つ。リクエストの組み立て、項目ごとの解釈、ストリーミングのイベントの処理、エラーの変換を、自分で書いて保守することになる。
+  sources:
+    - title: Upgrading（RubyLLM）— OpenAI の既定のプロトコルが Responses API であること
+      url: https://rubyllm.com/upgrading/
+    - title: Advanced Request Control（RubyLLM）— プロトコルの選び方
+      url: https://rubyllm.com/chat-request-control/
+    - title: Migrate to the Responses API（OpenAI）
+      url: https://developers.openai.com/api/docs/guides/migrate-to-responses
+  scenarios:
+    - key: answer_inquiry
+      name: 顧客からの問い合わせに回答する
+      handler: ResponsesApi::AnswerInquiry
+      providers: [openai]
+      # A model RubyLLM sends through the Responses API. Audio, realtime, and
+      # search models go through Chat Completions, which defeats this demo.
+      models:
+        model: gpt-5-nano
+      inputs:
+        - name: inquiry
+          label: 顧客からの問い合わせ文
+          required: true
+          default: |-
+            先週注文したワイヤレスイヤホン（注文番号 A-10234）が、まだ届きません。配送状況を確認する方法と、届かない場合にどうすればよいかを教えてください。
+      result_kind: text_answer
+      retryable: true
+
+- key: citations
+  name: Citations
+  summary: 規約や契約のように、回答の根拠を読み手が検証する必要がある
+  sources:
+    - title: Citations（RubyLLM）
+      url: https://rubyllm.com/citations/
+  scenarios:
+    - key: cite_return_policy
+      name: 返品ポリシーに基づいて回答する
+
+- key: tool-approval
+  name: Tool Approval
+  official_name: Human Approval for Tools
+  summary: 返金、削除、送信のように取り消せない操作を AI に提案させ、実行するかどうかは人が決めたい
+  sources:
+    - title: Controlling Tool Execution（RubyLLM）
+      url: https://rubyllm.com/tool-execution/
+  scenarios:
+    - key: approve_refund
+      name: AI が提案した返金を承認する
+
+- key: batches
+  name: Batches
+  summary: チケットの分類や要約のように、すぐに応答を返す必要がない、件数の多い処理を行いたい
+  sources:
+    - title: Batches（RubyLLM）
+      url: https://rubyllm.com/batches/
+  scenarios:
+    - key: classify_tickets
+      name: サポートチケットをまとめて分類する
+
+- key: model-fallbacks
+  name: Model Fallbacks
+  summary: プロバイダーの障害やレート制限が起きても、応答を続けたい
+  sources:
+    - title: Error Handling（RubyLLM）
+      url: https://rubyllm.com/error-handling/
+  scenarios:
+    - key: fall_back_to_another_provider
+      name: 主モデルが応答できないときに予備モデルで回答する
+
+- key: video-and-speech
+  name: Video and Speech Generation
+  summary: 回答文を読み上げる音声や、商品の説明文からの短い紹介動画を用意したい
+  sources:
+    - title: Text to Speech（RubyLLM）
+      url: https://rubyllm.com/text-to-speech/
+    - title: Video Generation（RubyLLM）
+      url: https://rubyllm.com/video-generation/
+  scenarios:
+    - key: speak_answer
+      name: 回答文を読み上げる
+    - key: generate_product_video
+      name: 商品の紹介動画を生成する
+
+- key: provider-tools
+  name: Provider Tools
+  summary: Web 検索やコードの実行環境を、自前で構築、運用したくない
+  sources:
+    - title: Provider Tools（RubyLLM）
+      url: https://rubyllm.com/provider-tools/
+  scenarios:
+    - key: search_web
+      name: Web 検索で最新の情報を含めて回答する
+    - key: run_code
+      name: 注文データを集計するコードを実行する
+
+- key: deep-research
+  name: Deep Research
+  official_name: Hosted Research
+  summary: 数分以上の待ち時間を許容して、複数の情報源にあたった調査レポートを得たい
+  sources:
+    - title: Hosted Research（RubyLLM）
+      url: https://rubyllm.com/hosted-research/
+  scenarios:
+    - key: research_topic
+      name: 調査テーマのレポートを作る
+
+- key: tokenization
+  name: Tokenization and Token Counting
+  summary: 送信前に入力のトークン数を数えたい、テキストがトークンにどう分割されるかを知りたい
+  sources:
+    - title: Tokenization（RubyLLM）
+      url: https://rubyllm.com/tokenization/
+  scenarios:
+    - key: count_tokens
+      name: 送信前に入力のトークン数を数える
+    - key: tokenize_text
+      name: テキストのトークンへの分割を見る
+
+- key: workflow-instrumentation
+  name: Workflow Instrumentation
+  summary: 複数のステップからなる処理で、どのステップが時間とコストを使っているかを特定したい
+  sources:
+    - title: Instrumentation and Observability（RubyLLM）
+      url: https://rubyllm.com/instrumentation/
+    - title: Agentic Workflows（RubyLLM）
+      url: https://rubyllm.com/agentic-workflows/
+  scenarios:
+    - key: run_ticket_workflow
+      name: チケットの分類、回答の下書き、レビューを順に行う

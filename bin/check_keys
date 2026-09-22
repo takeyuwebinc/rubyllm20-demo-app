@@ -1,0 +1,58 @@
+#!/usr/bin/env ruby
+# Verifies the provider credentials in .env by sending one tiny chat request per
+# provider. A chat (rather than a free endpoint) is used on purpose: it also
+# catches a valid key with no credits, the most common setup failure.
+# Runs without booting Rails. See docs/api-keys.md.
+require "bundler/setup"
+require "dotenv"
+require "ruby_llm"
+require_relative "../lib/failure_kinds"
+
+APP_ROOT = File.expand_path("..", __dir__)
+Dotenv.load(File.join(APP_ROOT, ".env"))
+
+CHECKS = [
+  { name: "OpenAI",    env: "OPENAI_API_KEY",       model: "gpt-5-nano",       provider: :openai },
+  { name: "Anthropic", env: "ANTHROPIC_API_KEY",    model: "claude-haiku-4-5", provider: :anthropic },
+  { name: "xAI",       env: "XAI_API_KEY",          model: "grok-4.3",         provider: :xai },
+  { name: "Vertex AI", env: "GOOGLE_CLOUD_PROJECT", model: "gemini-2.5-flash", provider: :vertexai }
+].freeze
+
+def blank?(value) = value.nil? || value.strip.empty?
+
+RubyLLM.configure do |config|
+  config.openai_api_key = ENV["OPENAI_API_KEY"] unless blank?(ENV["OPENAI_API_KEY"])
+  config.anthropic_api_key = ENV["ANTHROPIC_API_KEY"] unless blank?(ENV["ANTHROPIC_API_KEY"])
+  config.xai_api_key = ENV["XAI_API_KEY"] unless blank?(ENV["XAI_API_KEY"])
+  config.vertexai_project_id = ENV["GOOGLE_CLOUD_PROJECT"] unless blank?(ENV["GOOGLE_CLOUD_PROJECT"])
+  config.vertexai_location = ENV["GOOGLE_CLOUD_LOCATION"] unless blank?(ENV["GOOGLE_CLOUD_LOCATION"])
+  config.max_retries = 0
+  config.request_timeout = 60
+end
+
+unless File.exist?(File.join(APP_ROOT, ".env"))
+  puts ".env がない。`cp .env.example .env` で作成し、値を記入する。"
+end
+
+failed = false
+
+CHECKS.each do |check|
+  label = check[:name].ljust(10)
+
+  if blank?(ENV[check[:env]])
+    puts "#{label} SKIP  #{check[:env]} が未設定"
+    next
+  end
+
+  begin
+    response = RubyLLM.chat(model: check[:model], provider: check[:provider]).ask("Reply with the single word: pong")
+    puts "#{label} OK    #{check[:model]} (in=#{response.tokens.input} out=#{response.tokens.output} tokens)"
+  rescue StandardError => e
+    failed = true
+    kind = FailureKinds.for(e)
+    puts "#{label} NG    #{kind ? "#{kind.name} (#{e.class})" : e.class}: #{e.message.lines.first&.strip}"
+    puts "#{' ' * 17}→ #{kind&.hint || "上のエラー内容を確認する"}"
+  end
+end
+
+exit 1 if failed

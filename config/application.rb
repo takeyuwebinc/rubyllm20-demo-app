@@ -21,7 +21,8 @@ module Rubyllm20DemoApp
     # These settings can be overridden in specific environments using the files
     # in config/environments, which are processed later.
     #
-    # config.time_zone = "Central Time (US & Canada)"
+    # Run times are shown in the local time of the one person using this app.
+    config.time_zone = "Tokyo"
     # config.eager_load_paths << Rails.root.join("extras")
   end
 end

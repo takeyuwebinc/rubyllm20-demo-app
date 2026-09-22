@@ -14,8 +14,12 @@ gem "importmap-rails"
 gem "turbo-rails"
 # Hotwire's modest JavaScript framework [https://stimulus.hotwired.dev]
 gem "stimulus-rails"
+# Use Tailwind CSS [https://github.com/rails/tailwindcss-rails]
+gem "tailwindcss-rails", "~> 4.6"
 # Build JSON APIs with ease [https://github.com/rails/jbuilder]
 gem "jbuilder"
+# Paginate the run history [https://github.com/kaminari/kaminari]
+gem "kaminari", "~> 1.2"
 
 # Use Active Model has_secure_password [https://guides.rubyonrails.org/active_model_basics.html#securepassword]
 # gem "bcrypt", "~> 3.1.7"
@@ -40,7 +44,23 @@ gem "thruster", require: false
 # Use Active Storage variants [https://guides.rubyonrails.org/active_storage_overview.html#transforming-images]
 gem "image_processing", "~> 1.2"
 
+# The subject of this demo app. Pinned: 2.0.0 was released on 2026-09-18 [https://rubyllm.com]
+gem "ruby_llm", "2.0.0"
+# Required by RubyLLM for Vertex AI authentication (Deep Research demo)
+gem "googleauth", "~> 1.15"
+
+# Error monitoring, and the OTLP bridge that ships OpenTelemetry traces to Sentry [https://docs.sentry.io/platforms/ruby/guides/rails/integrations/otlp/]
+gem "sentry-ruby", "~> 7.0"
+gem "sentry-rails", "~> 7.0"
+gem "sentry-opentelemetry", "~> 7.0"
+# Tracing itself is OpenTelemetry; spans are built from RubyLLM's instrumentation events
+gem "opentelemetry-sdk", "~> 1.13"
+gem "opentelemetry-exporter-otlp", "~> 0.36"
+
 group :development, :test do
+  # Load provider API keys from .env [https://github.com/bkeepers/dotenv]
+  gem "dotenv-rails"
+
   # See https://guides.rubyonrails.org/debugging_rails_applications.html#debugging-with-the-debug-gem
   gem "debug", platforms: %i[ mri windows ], require: "debug/prelude"
 

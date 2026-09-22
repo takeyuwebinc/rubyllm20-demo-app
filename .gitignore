@@ -9,6 +9,7 @@
 
 # Ignore all environment files.
 /.env*
+!/.env.example
 
 # Ignore all logfiles and tempfiles.
 /log/*
@@ -33,3 +34,6 @@
 # Ignore key files for decrypting credentials and more.
 /config/*.key
 
+
+/app/assets/builds/*
+!/app/assets/builds/.keep

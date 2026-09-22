@@ -1,0 +1,45 @@
+<% content_for :title, "履歴" %>
+
+<h1 class="text-2xl font-bold">履歴</h1>
+
+<%= form_with url: runs_path, method: :get, class: "mt-6 flex items-end gap-3" do |form| %>
+  <div>
+    <%= form.label :demo, "デモ", class: "block text-sm font-medium text-gray-700" %>
+    <%= form.select :demo, options_for_select(Demos::Catalog.demos.map { |demo| [ demo.name, demo.key ] }, @demo&.key),
+          { include_blank: "すべてのデモ" },
+          class: "mt-1 block rounded-md border border-gray-300 bg-white px-3 py-2 text-sm shadow-sm" %>
+  </div>
+  <%= form.submit "絞り込む", name: nil, class: "btn-secondary" %>
+<% end %>
+
+<% if @runs.any? %>
+  <ul class="mt-6 divide-y divide-gray-200 rounded-lg border border-gray-200 bg-white">
+    <% @runs.each do |run| %>
+      <li data-run="<%= run.id %>">
+        <%= link_to run_path(run), class: "flex items-start justify-between gap-4 px-5 py-4 hover:bg-gray-50" do %>
+          <span class="min-w-0">
+            <span class="block text-sm text-gray-500"><%= run_demo_name(run) %></span>
+            <span class="block font-medium text-gray-900"><%= run_title(run) %></span>
+          </span>
+          <span class="flex shrink-0 flex-col items-end gap-1">
+            <%= run_status_badge(run) %>
+            <span class="text-xs text-gray-500"><%= format_time(run.created_at) %></span>
+          </span>
+        <% end %>
+      </li>
+    <% end %>
+  </ul>
+
+  <nav class="mt-4 flex items-center gap-3">
+    <%= link_to_prev_page @runs, "新しい実行", class: "btn-secondary" %>
+    <%= link_to_next_page @runs, "古い実行", class: "btn-secondary" %>
+  </nav>
+<% elsif @demo %>
+  <p class="mt-6 text-sm text-gray-600">
+    このデモの実行はまだない。<%= link_to "#{@demo.name} のデモを開く", demo_path(@demo.key), class: "link-quiet" %>
+  </p>
+<% else %>
+  <p class="mt-6 text-sm text-gray-600">
+    まだ実行がない。<%= link_to "デモの一覧を開く", root_path, class: "link-quiet" %>
+  </p>
+<% end %>
