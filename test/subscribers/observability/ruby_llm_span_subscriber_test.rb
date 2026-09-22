@@ -107,6 +107,57 @@ module Observability
       assert_equal [ { "type" => "reasoning", "content" => "Look up the order." }, { "type" => "text", "content" => "It shipped." } ], output.first["parts"]
     end
 
+    test "captures the steps the provider ran as tool calls after the model's own, and leaves citations out" do
+      answer = RubyLLM::Message.new(
+        role: :assistant, content: "Ruby 3.5 is the latest.", model: "gpt-5-nano",
+        tool_calls: { "call_1" => RubyLLM::ToolCall.new(id: "call_1", name: "find_order", arguments: { "id" => 42 }) },
+        server_tool_calls: [
+          RubyLLM::ServerToolCall.new(type: "web_search_call", id: "ws_1", input: { "type" => "search", "queries" => [ "latest ruby" ] }, raw: {}),
+          RubyLLM::ServerToolCall.new(type: "server_tool_use", name: "web_search", id: "srvtoolu_1", input: { "query" => "ruby" }, raw: {}),
+          RubyLLM::ServerToolCall.new(type: "web_search_call", id: "ws_2", raw: {})
+        ],
+        citations: [ { url: "https://www.ruby-lang.org/", title: "Ruby", text: "Ruby 3.5" } ]
+      )
+
+      instrument("chat.ruby_llm", chat_payload) { |payload| complete(payload, response: answer) }
+
+      output = JSON.parse(span("chat gpt-5-nano").attributes["gen_ai.output.messages"])
+      assert_equal [
+        { "type" => "text", "content" => "Ruby 3.5 is the latest." },
+        { "type" => "tool_call", "id" => "call_1", "name" => "find_order", "arguments" => { "id" => 42 } },
+        { "type" => "tool_call", "id" => "ws_1", "name" => "web_search_call", "arguments" => { "type" => "search", "queries" => [ "latest ruby" ] } },
+        { "type" => "tool_call", "id" => "srvtoolu_1", "name" => "web_search", "arguments" => { "query" => "ruby" } },
+        { "type" => "tool_call", "id" => "ws_2", "name" => "web_search_call", "arguments" => {} }
+      ], output.sole["parts"]
+    end
+
+    test "captures a response that holds only the provider's steps and no text" do
+      answer = RubyLLM::Message.new(
+        role: :assistant, content: "", model: "gpt-5-nano",
+        server_tool_calls: [ { type: "web_search_call", id: "ws_1", input: { type: "open_page", url: "https://www.ruby-lang.org/" } } ]
+      )
+
+      instrument("chat.ruby_llm", chat_payload) { |payload| complete(payload, response: answer) }
+
+      output = JSON.parse(span("chat gpt-5-nano").attributes["gen_ai.output.messages"])
+      assert_equal [ { "role" => "assistant", "parts" => [
+        { "type" => "tool_call", "id" => "ws_1", "name" => "web_search_call", "arguments" => { "type" => "open_page", "url" => "https://www.ruby-lang.org/" } }
+      ] } ], output
+    end
+
+    test "captures a response without provider steps as before, whether it has none or cannot have any" do
+      [
+        RubyLLM::Message.new(role: :assistant, content: "pong", model: "gpt-5-nano", server_tool_calls: []),
+        FakeMessage.new(role: :assistant, content: "pong", finish_reason: :stop, model: "gpt-5-nano")
+      ].each do |answer|
+        @exporter.reset
+        instrument("chat.ruby_llm", chat_payload) { |payload| complete(payload, response: answer) }
+
+        output = JSON.parse(span("chat gpt-5-nano").attributes["gen_ai.output.messages"])
+        assert_equal [ { "role" => "assistant", "parts" => [ { "type" => "text", "content" => "pong" } ] } ], output, answer.class.name
+      end
+    end
+
     test "leaves prompts and responses out when content capture is off" do
       ActiveSupport::Notifications.unsubscribe(@subscription)
       subscriber = RubyLLMSpanSubscriber.new(tracer: @provider.tracer("test"), capture_content: false)
