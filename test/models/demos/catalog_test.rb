@@ -41,5 +41,26 @@ module Demos
       assert_nil Catalog.demo("missing")
       assert_nil Catalog.scenario("missing")
     end
+
+    test "fully describes every implemented scenario" do
+      Catalog.demos.flat_map(&:scenarios).select(&:implemented?).each do |scenario|
+        assert_kind_of Class, scenario.handler, scenario.key
+        assert_predicate scenario.providers, :any?, scenario.key
+        assert_predicate scenario.models, :any?, scenario.key
+        assert_predicate scenario.inputs, :any?, scenario.key
+        assert_predicate scenario.result_kind, :present?, scenario.key
+        refute_nil scenario.retryable, scenario.key
+      end
+    end
+
+    # Availability is judged from the providers a scenario lists, while the
+    # handler reaches the provider through the model id. They must agree.
+    test "lists the provider each model of an implemented scenario resolves to" do
+      Catalog.demos.flat_map(&:scenarios).select(&:implemented?).each do |scenario|
+        scenario.models.each_value do |model_id|
+          assert_includes scenario.providers, RubyLLM.models.find(model_id).provider, "#{scenario.key}: #{model_id}"
+        end
+      end
+    end
   end
 end

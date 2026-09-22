@@ -32,6 +32,7 @@
   scenarios:
     - key: answer_inquiry
       name: 顧客からの問い合わせに回答する
+      handler: ResponsesApi::AnswerInquiry
       providers: [openai]
       models:
         model: gpt-5-nano
