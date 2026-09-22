@@ -65,4 +65,10 @@ module FailureKinds
   def self.for(error)
     TABLE.find { |error_class, _| error.is_a?(error_class) }&.last
   end
+
+  # Whether +error+ came from calling a provider rather than from a bug in
+  # the caller: any RubyLLM::Error, or an error the table names.
+  def self.provider_call?(error)
+    error.is_a?(RubyLLM::Error) || !self.for(error).nil?
+  end
 end

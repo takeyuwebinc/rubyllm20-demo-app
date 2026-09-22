@@ -39,6 +39,13 @@ class FailureKindsTest < ActiveSupport::TestCase
     assert_nil FailureKinds.for(ArgumentError.new)
   end
 
+  test "tells provider failures from bugs" do
+    assert FailureKinds.provider_call?(RubyLLM::ToolCallParseError.new)
+    assert FailureKinds.provider_call?(RubyLLM::ModelNotFoundError.new("gpt-x"))
+    assert FailureKinds.provider_call?(Faraday::ConnectionFailed.new("refused"))
+    refute FailureKinds.provider_call?(NoMethodError.new("content"))
+  end
+
   test "describes a worker that died while running a job" do
     assert_equal "ワーカーの異常終了", FailureKinds::WORKER_LOST.name
     assert_match "もう一度実行", FailureKinds::WORKER_LOST.hint

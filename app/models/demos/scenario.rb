@@ -45,6 +45,12 @@ module Demos
       inputs.select(&:required).map(&:name).select { |name| values[name].blank? }
     end
 
+    # Calls the handler with each input and each model as a keyword, so the
+    # handler reads like ordinary RubyLLM code with nothing of this app in it.
+    def perform(input)
+      handler.perform(**input_values(input).symbolize_keys, **models.symbolize_keys)
+    end
+
     private
 
     # Only the names of the required settings are public in RubyLLM 2.0.0;

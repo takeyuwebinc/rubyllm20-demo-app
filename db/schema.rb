@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_09_22_062658) do
+ActiveRecord::Schema[8.1].define(version: 2026_09_22_063741) do
   create_table "active_storage_attachments", force: :cascade do |t|
     t.bigint "blob_id", null: false
     t.datetime "created_at", null: false
@@ -45,6 +45,21 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_22_062658) do
     t.bigint "ruby_llm_model_id", null: false
     t.datetime "updated_at", null: false
     t.index ["ruby_llm_model_id"], name: "index_chats_on_ruby_llm_model_id"
+  end
+
+  create_table "demo_runs", force: :cascade do |t|
+    t.string "conversation_id", null: false
+    t.datetime "created_at", null: false
+    t.json "failure"
+    t.datetime "finished_at"
+    t.json "input", default: {}, null: false
+    t.json "result"
+    t.string "scenario_key", null: false
+    t.datetime "started_at"
+    t.string "status", default: "running", null: false
+    t.json "trace_ids", default: [], null: false
+    t.datetime "updated_at", null: false
+    t.index ["conversation_id"], name: "idx_demo_runs_conversation_id", unique: true
   end
 
   create_table "messages", force: :cascade do |t|
