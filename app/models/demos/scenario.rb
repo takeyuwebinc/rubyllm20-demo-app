@@ -27,7 +27,8 @@ module Demos
     end
 
     # Tells whether the settings the providers need are present. Whether they
-    # are valid shows up only when a run fails.
+    # are valid, and whether Vertex AI's Application Default Credentials
+    # exist, shows up only when a run fails.
     def availability(config = RubyLLM.config)
       return Availability.new(:preparing, []) unless implemented?
 

@@ -12,6 +12,8 @@ module Demos
       "awaiting_approval" => %w[running failed cancelled]
     }.freeze
 
+    # awaiting_approval and cancelled belong to scenarios that wait for a
+    # person's decision or for the provider to finish the work.
     enum :status, {
       running: "running",
       awaiting_approval: "awaiting_approval",
@@ -20,6 +22,8 @@ module Demos
       cancelled: "cancelled"
     }, validate: true
 
+    # Audio and video a scenario generates, kept with the run so the history
+    # can play them back.
     has_many_attached :generated_files
 
     validates :scenario_key, :conversation_id, presence: true
@@ -118,7 +122,8 @@ module Demos
     private
 
     # Sentry puts the id in a URL path, so it is limited to letters, digits,
-    # hyphens, and underscores.
+    # hyphens, and underscores. The span subscriber also replaces any other
+    # character, as a guard for ids that come from elsewhere.
     def issue_conversation_id
       self.conversation_id ||= "run-#{SecureRandom.hex(8)}"
     end

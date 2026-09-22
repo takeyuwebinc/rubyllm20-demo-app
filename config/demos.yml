@@ -7,7 +7,9 @@
 # A scenario with no handler is being prepared. An implemented scenario lists
 # its providers (used to tell whether it can run), its models by the keyword
 # the handler takes, its inputs, how to show its result, and whether a job
-# that runs again may start it over.
+# that runs again may start it over (retryable). A scenario that submits work
+# to the provider, or does something that cannot be undone, is not retryable:
+# starting over would submit the work twice or do it again.
 #
 # Inputs are sent to Sentry with the prompt. Keep every default fictional.
 
@@ -34,6 +36,8 @@
       name: 顧客からの問い合わせに回答する
       handler: ResponsesApi::AnswerInquiry
       providers: [openai]
+      # A model RubyLLM sends through the Responses API. Audio, realtime, and
+      # search models go through Chat Completions, which defeats this demo.
       models:
         model: gpt-5-nano
       inputs:

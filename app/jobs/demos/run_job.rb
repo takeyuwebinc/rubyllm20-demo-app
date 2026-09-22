@@ -31,6 +31,9 @@ module Demos
       scenario = run.scenario or raise ArgumentError, "Scenario #{run.scenario_key} is not defined"
       # Solid Queue puts a job back in the queue when its worker stops
       # gracefully. Starting over would repeat what the first attempt did.
+      # TODO(when the first scenario with retryable: false is implemented):
+      # the run is left running here; that scenario decides how to resume or
+      # fail it.
       return if run.started_at && !scenario.retryable
 
       run.update!(started_at: Time.current)
@@ -41,6 +44,8 @@ module Demos
       run.succeed!(result)
     rescue StandardError => error
       run.fail_with!(error)
+      # A provider failure is shown on the run page with its likely causes.
+      # Only an error that points to a bug in this app is reported.
       unless FailureKinds.provider_call?(error)
         Rails.error.report(error, context: { run_id: run.id, scenario_key: run.scenario_key, conversation_id: run.conversation_id })
       end
