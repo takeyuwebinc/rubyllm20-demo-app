@@ -1,0 +1,34 @@
+<%# The verdict and what is left come from the result as the action judged them. Neither exists for a model with no known context window. %>
+<% result = run.result %>
+<% known = !result["fits"].nil? %>
+<div data-token-count class="max-w-prose space-y-4">
+  <% if known %>
+    <p class="flex items-center gap-2 text-sm text-gray-700">
+      コンテキストウィンドウに
+      <span data-verdict class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset <%= result["fits"] ? "bg-green-50 text-green-700 ring-green-600/20" : "bg-red-50 text-red-700 ring-red-600/20" %>"><%= result["fits"] ? "収まる" : "収まらない" %></span>
+    </p>
+  <% else %>
+    <p data-limit-unknown class="text-sm text-gray-700">このモデルのコンテキストウィンドウは登録簿にないため、上限に収まるかは判定できない。</p>
+  <% end %>
+
+  <dl class="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-sm">
+    <dt class="text-gray-500">入力トークン数</dt>
+    <dd data-input-tokens class="font-medium text-gray-900"><%= number_with_delimiter(result["input_tokens"]) %></dd>
+    <% if known %>
+      <dt class="text-gray-500">コンテキストウィンドウ</dt>
+      <dd data-context-window class="text-gray-800"><%= number_with_delimiter(result["context_window"]) %></dd>
+      <dt class="text-gray-500">余地</dt>
+      <% if result["remaining"].negative? %>
+        <dd data-remaining class="font-medium text-red-700"><%= number_with_delimiter(-result["remaining"]) %> トークン超過</dd>
+      <% else %>
+        <dd data-remaining class="text-gray-800"><%= number_with_delimiter(result["remaining"]) %></dd>
+      <% end %>
+    <% end %>
+    <% if result["max_output_tokens"] %>
+      <dt class="text-gray-500">最大出力トークン数</dt>
+      <dd data-max-output-tokens class="text-gray-800"><%= number_with_delimiter(result["max_output_tokens"]) %></dd>
+    <% end %>
+  </dl>
+
+  <p class="text-sm text-gray-500">数えたモデル: <%= result["model"] %></p>
+</div>

@@ -130,6 +130,38 @@ module Demos
       assert_select "#speak_answer [data-input-error='text']", text: "入力してください"
     end
 
+    test "records a token count run with its instructions and question, and queues it" do
+      assert_difference(-> { Run.count }) do
+        with_openai_key("sk-test") do
+          post demo_runs_path("tokenization"), params: { run: { scenario_key: "count_tokens", input: { instructions: "サポートの担当者です。", question: "返品できますか。" } } }
+        end
+      end
+
+      run = Run.last
+      assert_redirected_to run_path(run)
+      assert_equal({ "instructions" => "サポートの担当者です。", "question" => "返品できますか。" }, run.input)
+      assert_enqueued_with(job: RunJob, args: [ run ])
+    end
+
+    test "refuses a token count whose instructions or question is blank, and says which" do
+      assert_no_difference(-> { Run.count }) do
+        with_openai_key("sk-test") do
+          post demo_runs_path("tokenization"), params: { run: { scenario_key: "count_tokens", input: { instructions: " ", question: "返品できますか。" } } }
+        end
+      end
+      assert_response :unprocessable_entity
+      assert_select "#count_tokens [data-input-error='instructions']", text: "入力してください"
+      assert_select "#count_tokens [data-input-error='question']", count: 0
+
+      assert_no_difference(-> { Run.count }) do
+        with_openai_key("sk-test") do
+          post demo_runs_path("tokenization"), params: { run: { scenario_key: "count_tokens", input: { instructions: "サポートの担当者です。", question: "\n" } } }
+        end
+      end
+      assert_response :unprocessable_entity
+      assert_select "#count_tokens [data-input-error='question']", text: "入力してください"
+    end
+
     test "says in the scenario why it cannot run any more" do
       assert_no_difference(-> { Run.count }) do
         with_openai_key(nil) do

@@ -198,6 +198,45 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
     assert_select "#speak_answer input[type=submit][value='実行する'][disabled]"
   end
 
+  test "shows the token count as runnable with its explanation, sources, code, and default inputs" do
+    with_openai_key("sk-test") { get root_path }
+
+    assert_select "[data-demo='tokenization'] [data-availability]", text: "実行できる"
+
+    with_openai_key("sk-test") { get demo_path("tokenization") }
+
+    assert_select "h2", text: "役立つケース"
+    assert_select "*", text: /質問は会話に加えない/
+    assert_select "h2", text: "使わない場合に困ること"
+    assert_select "*", text: /ContextLengthExceededError/
+    assert_select "a[href='https://rubyllm.com/tokenization/#counting-a-chat-request'][target='_blank']"
+    assert_select "a[href='https://rubyllm.com/whats-new-in-2-0/#tokenization-and-token-counting'][target='_blank']"
+    assert_select "a[href='https://developers.openai.com/api/docs/guides/token-counting'][target='_blank']"
+    assert_select "a[href='https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens/methods/count'][target='_blank']"
+    assert_select "#count_tokens" do
+      assert_select "pre code", text: /count_tokens\(@question\)/
+      assert_select "pre code", text: /context_window/
+      assert_select "textarea[name='run[input][instructions]']", text: /返品ポリシー/
+      assert_select "textarea[name='run[input][question]']", text: /D-40518/
+      assert_select "input[type=submit][value='実行する']:not([disabled])"
+    end
+    assert_select "#tokenize_text" do
+      assert_select "*", text: /準備中/
+      assert_select "textarea", count: 0
+    end
+  end
+
+  test "keeps the token count from running without OpenAI settings" do
+    with_openai_key(nil) { get root_path }
+
+    assert_select "[data-demo='tokenization'] [data-availability]", text: "設定値が足りない（OpenAI）"
+
+    with_openai_key(nil) { get demo_path("tokenization") }
+
+    assert_select "#count_tokens [data-availability]", text: "設定値が足りない（OpenAI）"
+    assert_select "#count_tokens input[type=submit][value='実行する'][disabled]"
+  end
+
   test "shows a scenario being prepared without code or input" do
     get demo_path("citations")
 

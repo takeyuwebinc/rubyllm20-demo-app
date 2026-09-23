@@ -19,8 +19,8 @@ module Demos
       end
     end
 
-    # Answers each question with the next scripted answer, in place of a chat
-    # with a provider, and keeps the questions it was asked.
+    # Answers each question, or each count, with the next scripted answer, in
+    # place of a chat with a provider, and keeps the questions it was given.
     class ScriptedChat
       attr_reader :questions
 
@@ -36,6 +36,7 @@ module Demos
         @questions << question
         @answers.fetch(@questions.size - 1).call
       end
+      alias_method :count_tokens, :ask
     end
 
     include ScreenHelpers
@@ -127,6 +128,21 @@ module Demos
       assert_nil run.result
       assert_equal "RubyLLM::RateLimitError", run.failure["error_class"]
       assert_equal 2, chat.questions.size, "the review step must not ask after the draft step failed"
+    end
+
+    test "fails a token count whose input exceeds the model's limit, as that kind of failure" do
+      run = Run.create!(scenario_key: "count_tokens", input: { "instructions" => "サポートの担当者です。", "question" => "返品できますか。" })
+      chat = ScriptedChat.new(-> { raise RubyLLM::ContextLengthExceededError, "Your input exceeds the context window of this model." })
+
+      with_chat(chat) do
+        assert_no_error_reported { RunJob.perform_now(run) }
+      end
+
+      assert_predicate run.reload, :failed?
+      assert_nil run.result
+      assert_equal "入力がモデルの上限を超えた", run.failure["kind"]
+      assert_equal "Your input exceeds the context window of this model.", run.failure["message"]
+      assert_equal [ "返品できますか。" ], chat.questions
     end
 
     test "does nothing for a finished run" do
