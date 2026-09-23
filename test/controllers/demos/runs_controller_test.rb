@@ -162,6 +162,40 @@ module Demos
       assert_select "#count_tokens [data-input-error='question']", text: "入力してください"
     end
 
+    test "records a research run with its topic and queues it" do
+      assert_difference(-> { Run.count }) do
+        with_vertexai_config("demo-project") do
+          post demo_runs_path("deep-research"), params: { run: { scenario_key: "research_topic", input: { topic: "返品の法制度を整理してほしい" } } }
+        end
+      end
+
+      run = Run.last
+      assert_redirected_to run_path(run)
+      assert_equal({ "topic" => "返品の法制度を整理してほしい" }, run.input)
+      assert_enqueued_with(job: RunJob, args: [ run ])
+    end
+
+    test "refuses a blank research topic" do
+      assert_no_difference(-> { Run.count }) do
+        with_vertexai_config("demo-project") do
+          post demo_runs_path("deep-research"), params: { run: { scenario_key: "research_topic", input: { topic: " " } } }
+        end
+      end
+
+      assert_response :unprocessable_entity
+      assert_select "#research_topic [data-input-error='topic']", text: "入力してください"
+    end
+
+    test "records no research run without Vertex AI settings" do
+      assert_no_difference(-> { Run.count }) do
+        with_vertexai_config(nil) do
+          post demo_runs_path("deep-research"), params: { run: { scenario_key: "research_topic", input: { topic: "返品の法制度" } } }
+        end
+      end
+
+      assert_no_enqueued_jobs
+    end
+
     test "says in the scenario why it cannot run any more" do
       assert_no_difference(-> { Run.count }) do
         with_openai_key(nil) do

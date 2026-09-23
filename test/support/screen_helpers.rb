@@ -9,6 +9,17 @@ module ScreenHelpers
     RubyLLM.config.openai_api_key = original
   end
 
+  # Vertex AI needs a project and a location; the location is the one
+  # Deep Research accepts unless given.
+  def with_vertexai_config(project_id, location: "global")
+    original = [ RubyLLM.config.vertexai_project_id, RubyLLM.config.vertexai_location ]
+    RubyLLM.config.vertexai_project_id = project_id
+    RubyLLM.config.vertexai_location = location
+    yield
+  ensure
+    RubyLLM.config.vertexai_project_id, RubyLLM.config.vertexai_location = original
+  end
+
   def with_env(values)
     originals = values.keys.to_h { |key| [ key, ENV[key] ] }
     values.each { |key, value| ENV[key] = value }
@@ -47,6 +58,38 @@ module ScreenHelpers
       assert_select "dd", text: "46.9 KB"
       assert_select "*", text: /AI が生成したもの/
     end
+  end
+
+  # A research report as DeepResearch::ResearchTopic returns it, complete,
+  # with one source, two steps, and a thinking summary.
+  def research_result(**overrides)
+    {
+      "report" => "# 返品の法制度\n\n通信販売には法定のクーリング・オフがない。",
+      "completed" => true,
+      "provider_status" => "completed",
+      "finish_reason" => "stop",
+      "citations" => [ {
+        "url" => "https://www.caa.go.jp/policies/", "title" => "特定商取引法ガイド", "text" => "法定のクーリング・オフがない",
+        "start_index" => 12, "end_index" => 26, "cited_text" => "通信販売にはクーリング・オフ制度はありません"
+      } ],
+      "steps" => [
+        { "type" => "google_search_call", "name" => "google_search", "input" => { "queries" => [ "通信販売 返品 特約" ] }, "result" => nil },
+        { "type" => "url_context_result", "name" => nil, "input" => nil, "result" => [ { "url" => "https://www.caa.go.jp/policies/" } ] }
+      ],
+      "thinking" => "まず法令を確かめる。",
+      "job_id" => "v1_research",
+      "agent" => "deep-research-preview-04-2026",
+      "tokens" => { "input" => 12_000, "output" => 8_000, "thinking" => 3_000, "cache_read" => 500 },
+      "cost" => nil
+    }.merge(overrides.transform_keys(&:to_s))
+  end
+
+  # A research run that kept its job's ID, succeeded or not yet.
+  def create_research_run(result: nil, remote_job_id: "v1_research", **attributes)
+    run = create_run(scenario_key: "research_topic", input: { "topic" => "返品の法制度を整理してほしい" }, started_at: 5.minutes.ago, **attributes)
+    run.keep_remote_job_id!(remote_job_id) if remote_job_id
+    run.succeed!(result) if result
+    run
   end
 
   # Replaces the storage service's upload for the block. The replacement is

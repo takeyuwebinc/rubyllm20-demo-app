@@ -237,6 +237,42 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
     assert_select "#count_tokens input[type=submit][value='実行する'][disabled]"
   end
 
+  test "shows the research as runnable with its explanation, sources, code, and default topic" do
+    with_vertexai_config("demo-project") { get root_path }
+
+    assert_select "[data-demo='deep-research'] [data-availability]", text: "実行できる"
+
+    with_vertexai_config("demo-project") { get demo_path("deep-research") }
+
+    assert_select "h2", text: "役立つケース"
+    assert_select "*", text: /RubyLLM::ResearchJob\.find/
+    assert_select "*", text: /120 分/
+    assert_select "*", text: /レポートの本文、トークン数、コストはトレースに載らず/
+    assert_select "h2", text: "使わない場合に困ること"
+    assert_select "*", text: /Interactions API/
+    assert_select "a[href='https://rubyllm.com/hosted-research/'][target='_blank']"
+    assert_select "a[href='https://rubyllm.com/whats-new-in-2-0/#hosted-research'][target='_blank']"
+    assert_select "a[href='https://docs.cloud.google.com/gemini-enterprise-agent-platform/agents/use-deep-research'][target='_blank']"
+    assert_select "a[href='https://rubyllm.com/provider-coverage/'][target='_blank']"
+    assert_select "#research_topic" do
+      assert_select "pre code", text: /research_later/
+      assert_select "pre code", text: /ResearchJob\.find/
+      assert_select "textarea[name='run[input][topic]']", text: /特定商取引法/
+      assert_select "input[type=submit][value='実行する']:not([disabled])"
+    end
+  end
+
+  test "keeps the research from running without Vertex AI settings" do
+    with_vertexai_config(nil) { get root_path }
+
+    assert_select "[data-demo='deep-research'] [data-availability]", text: "設定値が足りない（VertexAI）"
+
+    with_vertexai_config(nil) { get demo_path("deep-research") }
+
+    assert_select "#research_topic [data-availability]", text: "設定値が足りない（VertexAI）"
+    assert_select "#research_topic input[type=submit][value='実行する'][disabled]"
+  end
+
   test "shows a scenario being prepared without code or input" do
     get demo_path("citations")
 

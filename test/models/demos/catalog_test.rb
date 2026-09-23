@@ -46,7 +46,8 @@ module Demos
       Catalog.demos.flat_map(&:scenarios).select(&:implemented?).each do |scenario|
         assert_kind_of Class, scenario.handler, scenario.key
         assert_predicate scenario.providers, :any?, scenario.key
-        assert_predicate scenario.models, :any?, scenario.key
+        # A research agent is not a model of the registry; its handler keeps the ID.
+        assert_predicate scenario.models, :any?, scenario.key unless scenario.key == "research_topic"
         assert_predicate scenario.inputs, :any?, scenario.key
         assert_predicate scenario.result_kind, :present?, scenario.key
         refute_nil scenario.retryable, scenario.key
@@ -126,6 +127,25 @@ module Demos
 
       assert_equal 400_000, model.context_window
       assert_equal 128_000, model.max_output_tokens
+    end
+
+    test "researches a topic with Vertex AI's agent, without a model, never starting over" do
+      scenario = Catalog.scenario("research_topic")
+
+      assert_equal DeepResearch::ResearchTopic, scenario.handler
+      assert_equal %w[vertexai], scenario.providers
+      assert_equal({}, scenario.models)
+      assert_equal [ "topic" ], scenario.inputs.map(&:name)
+      assert scenario.inputs.sole.required
+      assert_match "出典", scenario.inputs.sole.default
+      assert_equal "research_report", scenario.result_kind
+      assert_equal false, scenario.retryable
+    end
+
+    test "gives every implemented scenario but the research one a model" do
+      without_models = Catalog.scenarios.select(&:implemented?).select { |scenario| scenario.models.empty? }
+
+      assert_equal [ "research_topic" ], without_models.map(&:key)
     end
 
     test "keeps the text tokenization scenario in preparation" do
