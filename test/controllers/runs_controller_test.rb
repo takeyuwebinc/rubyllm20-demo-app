@@ -411,7 +411,7 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
 
     assert_select "[data-run-status]", text: "失敗"
     assert_select "[data-product-video]", count: 0
-    assert_select "[data-failure]", text: /プロバイダーのエラー（XAI）/
+    assert_select "[data-failure]", text: /プロバイダーのエラー（xAI）/
     assert_select "[data-failure]", text: /timed out after 1800 seconds/
     assert_select "[data-remote-job-id] code", text: "video-1"
   end

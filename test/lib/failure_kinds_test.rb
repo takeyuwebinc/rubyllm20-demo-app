@@ -60,6 +60,19 @@ class FailureKindsTest < ActiveSupport::TestCase
     end
   end
 
+  # RubyLLM turns the HTTP errors of its requests to a provider's API into
+  # its own errors, so a bare Faraday error comes from a plain download.
+  test "names a download that failed at the provider or on the way a failed download, with causes to check" do
+    [ Faraday::ServerError.new("the server responded with status 503"), Faraday::SSLError.new("certificate verify failed") ].each do |error|
+      kind = FailureKinds.for(error)
+
+      assert_equal "取得の失敗", kind.name, error.class.name
+      assert_match "もう一度実行する", kind.hint, error.class.name
+      assert_no_match(/4xx/, kind.hint, error.class.name)
+      assert FailureKinds.provider_call?(error), error.class.name
+    end
+  end
+
   test "names a subclass by its own row rather than the base rows" do
     assert_equal "認証の失敗", FailureKinds.for(RubyLLM::UnauthorizedError.new("bad key")).name
     assert_equal "サービス停止", FailureKinds.for(RubyLLM::ServiceUnavailableError.new("down")).name
@@ -69,7 +82,7 @@ class FailureKindsTest < ActiveSupport::TestCase
 
   test "returns nil for an error outside the table" do
     assert_nil FailureKinds.for(ArgumentError.new)
-    assert_nil FailureKinds.for(Faraday::ServerError.new("500"))
+    assert_nil FailureKinds.for(IOError.new("disk full"))
   end
 
   test "tells provider failures from bugs" do

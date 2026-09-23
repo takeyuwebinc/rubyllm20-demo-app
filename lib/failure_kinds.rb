@@ -59,6 +59,11 @@ module FailureKinds
       "取得の失敗",
       "プロバイダーが取得を拒んだ（4xx）。動画の URL の期限切れなど。もう一度実行する"
     ),
+    # RubyLLM turns the HTTP errors of its requests to a provider's API into
+    # its own errors. A bare Faraday error, such as a 5xx or a TLS failure,
+    # comes from its plain downloads instead: a generated video or image, an
+    # attachment given by URL, or the model registry.
+    Faraday::Error => Kind.new("取得の失敗", "#{NETWORK}。もう一度実行する"),
     # RubyLLM raises the base class when a video or research job fails,
     # expires, or runs out of time, and for an HTTP status it has no class
     # for, such as 404.

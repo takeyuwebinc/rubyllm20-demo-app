@@ -202,14 +202,14 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
   test "keeps generating the product video from running without xAI settings" do
     with_xai_key(nil) { get demo_path("video-and-speech") }
 
-    assert_select "#generate_product_video [data-availability]", text: "設定値が足りない（XAI）"
+    assert_select "#generate_product_video [data-availability]", text: "設定値が足りない（xAI）"
     assert_select "#generate_product_video input[type=submit][value='実行する'][disabled]"
   end
 
   test "names both providers in the list when neither speech nor video has its settings" do
     with_xai_key(nil) { with_openai_key(nil) { get root_path } }
 
-    assert_select "[data-demo='video-and-speech'] [data-availability]", text: "設定値が足りない（OpenAI、XAI）"
+    assert_select "[data-demo='video-and-speech'] [data-availability]", text: "設定値が足りない（OpenAI、xAI）"
   end
 
   test "keeps the web search from running without OpenAI settings" do
