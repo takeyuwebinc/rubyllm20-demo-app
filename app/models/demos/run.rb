@@ -246,6 +246,11 @@ module Demos
     # scenario reads it (kind, id, provider, raw_status, request_counts).
     # The run stays running meanwhile: the work is under way at the
     # provider, and a run has no status of its own for that.
+    #
+    # The run keeps the work's id rather than a reference to RubyLLM's own
+    # record of it: finding the work by id (RubyLLM::Batch.find) is public,
+    # and RubyLLM's tables are not. The last state is kept beside it so the
+    # history shows it without asking the provider.
     def keep_remote_job!(state)
       refuse_unless_running!
       update!(remote_job: {

@@ -84,7 +84,9 @@ module Observability
     # the provider wrote, and each comes with its usage alone. That usage
     # is then described as its operation, such as a chat, so the backend
     # counts its tokens and cost as model calls. Without a block, the span
-    # lasts no time, and the event carries no prompt or answer.
+    # lasts no time, and the event carries no prompt or answer. No span is
+    # made up to carry them: spans come from RubyLLM's events only, and one
+    # made by the app would count the same answer twice.
     def described_event(name, payload)
       return name unless name == "usage.ruby_llm" && stack.none?(&:operation)
 

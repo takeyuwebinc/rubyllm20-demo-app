@@ -88,6 +88,11 @@ module Demos
     # later.
     #
     # Only a handler that has .check leaves work that ends on its own time.
+    # TODO(when a handler leaves work with a provider but has no .check, as
+    # the video and research scenarios do): call its .resume inside the
+    # workflow, where it waits for the work, instead of checking every
+    # minute. Work that ends within minutes to two hours is waited on in
+    # one job and one trace; only a batch, which may take a day, is checked.
     def continue_remote_job(run, scenario)
       state = scenario.check(run.remote_job)
       run.record_remote_check!(state)
@@ -114,6 +119,14 @@ module Demos
       end
     end
 
+    # Each check is a job of its own, scheduled a minute later rather than
+    # a wait inside one job: a batch may take a day, and the schedule is
+    # kept in Solid Queue's database, so a batch that ended while the app
+    # was stopped is collected by the first check after it starts. The run
+    # page's polling would stop once the reader left the page. Two checks
+    # of one run run at once only when a worker stops between scheduling
+    # the next check and finishing its job; a collection is not guarded
+    # against that, as the window is small.
     def check_later(run)
       self.class.set(wait: CHECK_INTERVAL).perform_later(run)
     end

@@ -8,7 +8,9 @@ module Batches
   # another process, and adds each answer to its chat when it is collected.
   class ClassifyTickets < ApplicationAction
     # Categories are stored and shown as these words, so no table of labels
-    # has to be kept in step with the result's display.
+    # has to be kept in step with the result's display. They are the ticket
+    # workflow's categories, written out again rather than shared, as the
+    # demo shows this file alone.
     CATEGORIES = %w[配送 返品・返金 商品の不具合 支払い その他].freeze
 
     class Classification < Schematist::Schema
@@ -55,6 +57,7 @@ module Batches
       # stored how the batch ended.
       def resume(batch_id)
         batch = RubyLLM::Batch.find(batch_id)
+        # statuses is filled in by messages, so it is read after it.
         answers = batch.messages
         {
           "batch_id" => batch.id,
