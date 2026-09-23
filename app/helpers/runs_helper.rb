@@ -48,7 +48,7 @@ module RunsHelper
   # run's status: a request succeeds, fails, or is cancelled as a run does.
   def request_status_badge(status)
     tag.span(STATUS_LABELS.fetch(status, status), data: { ticket_status: status },
-      class: "inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset #{STATUS_STYLES.fetch(status, STATUS_STYLES["cancelled"])}")
+      class: "inline-flex shrink-0 items-center whitespace-nowrap rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset #{STATUS_STYLES.fetch(status, STATUS_STYLES["cancelled"])}")
   end
 
   # The provider's tally of a batch's requests, or a dash while it reports
