@@ -22,6 +22,15 @@ module Runs
       assert_shows_speech(run)
     end
 
+    test "returns the generated product video of a run that succeeded" do
+      run = create_product_video_run
+
+      get run_status_path(run)
+
+      assert_no_match(/<html/, response.body)
+      assert_shows_product_video(run)
+    end
+
     test "returns the approval request while the run waits for a decision" do
       run = create_awaiting_run
 

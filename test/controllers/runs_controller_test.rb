@@ -355,6 +355,71 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
     assert_equal 1000, response.body.bytesize
   end
 
+  test "plays the generated product video, offers it to save, and says it is AI-generated" do
+    run = create_product_video_run
+
+    get run_path(run)
+
+    assert_select "[data-run-status]", text: "成功"
+    assert_shows_product_video(run)
+  end
+
+  test "says the video is missing when its attachment is gone, and shows the rest" do
+    run = create_product_video_run
+    run.generated_files.sole.purge
+
+    get run_path(run)
+
+    assert_select "[data-product-video]" do
+      assert_select "[data-video-missing]", text: "動画が見つからない"
+      assert_select "video", count: 0
+      assert_select "a", text: "動画を保存する", count: 0
+      assert_select "dd", text: "grok-imagine-video-1.5"
+      assert_select "dd", text: "6 秒"
+      assert_select "dd", text: "480p"
+      assert_select "dd", text: "16:9"
+      assert_select "dd", text: "1.5 MB"
+      assert_select "*", text: /AI が生成したもの/
+    end
+  end
+
+  test "shows a dash for the length of a video xAI gave none for" do
+    run = create_product_video_run(duration: nil)
+
+    get run_path(run)
+
+    assert_select "[data-product-video] dt", text: "長さ" do |terms|
+      assert_equal "—", terms.first.next_element.text.strip
+    end
+    assert_select "[data-product-video] dd", text: /秒/, count: 0
+  end
+
+  test "shows no product video for a run that is still running" do
+    run = create_run(scenario_key: "generate_product_video", input: { "description" => "電気ケトル" }, remote_job_id: "video-1")
+
+    get run_path(run)
+
+    assert_select "[data-product-video]", count: 0
+    assert_select "[data-remote-job-id] code", text: "video-1"
+  end
+
+  # A video element plays only what is served inline, and seeks with ranges.
+  test "serves the generated video inline, and in part when a range is asked for" do
+    run = create_product_video_run
+
+    get rails_blob_path(run.generated_files.sole, only_path: true)
+    follow_redirect!
+
+    assert_response :success
+    assert_equal "video/mp4", response.media_type
+    assert_match(/\Ainline/, response.headers["Content-Disposition"])
+
+    get request.url, headers: { "Range" => "bytes=1000-1999" }
+
+    assert_response :partial_content
+    assert_equal 1000, response.body.bytesize
+  end
+
   test "marks a run waiting for approval in the history and on its demo" do
     run = create_awaiting_run
 

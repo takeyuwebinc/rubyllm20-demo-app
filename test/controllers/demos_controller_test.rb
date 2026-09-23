@@ -170,10 +170,45 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
       assert_select "textarea[name='run[input][text]']", text: /A-10234/
       assert_select "input[type=submit][value='実行する']:not([disabled])"
     end
+  end
+
+  test "shows generating the product video as runnable with its explanation, sources, code, and default description" do
+    with_xai_key("xai-test") { with_openai_key(nil) { get root_path } }
+
+    assert_select "[data-demo='video-and-speech'] [data-availability]", text: "実行できる"
+
+    with_xai_key("xai-test") { get demo_path("video-and-speech") }
+
+    assert_select "*", text: /短い紹介動画を用意したい場合にも役立つ/
+    assert_select "*", text: /480p が 1 秒 0\.08 ドル、720p が 0\.14 ドル、1080p が 0\.25 ドル/
+    assert_select "*", text: /ID から `?VideoJob`? を開き直す公開の API がない/
+    assert_select "*", text: /一時的な URL/
+    assert_select "*", text: /状態の問い合わせの繰り返し/
+    assert_select "*", text: /:completed/
+    assert_select "h2 + ul > li > a[target='_blank']", 8
+    assert_select "a[href='https://docs.x.ai/developers/model-capabilities/video/generation'][target='_blank']"
+    assert_select "a[href='https://docs.x.ai/developers/model-capabilities/imagine'][target='_blank']"
+    assert_select "a[href='https://docs.x.ai/developers/models/grok-imagine-video-1.5'][target='_blank']"
     assert_select "#generate_product_video" do
-      assert_select "*", text: /準備中/
-      assert_select "input[type=submit]", count: 0
+      assert_select "[data-availability]", text: "実行できる"
+      assert_select "pre code", text: /RubyLLM\.animate_later/
+      assert_select "pre code", text: /\.wait\(/
+      assert_select "textarea[name='run[input][description]']", text: /電気ケトル/
+      assert_select "input[type=submit][value='実行する']:not([disabled])"
     end
+  end
+
+  test "keeps generating the product video from running without xAI settings" do
+    with_xai_key(nil) { get demo_path("video-and-speech") }
+
+    assert_select "#generate_product_video [data-availability]", text: "設定値が足りない（XAI）"
+    assert_select "#generate_product_video input[type=submit][value='実行する'][disabled]"
+  end
+
+  test "names both providers in the list when neither speech nor video has its settings" do
+    with_xai_key(nil) { with_openai_key(nil) { get root_path } }
+
+    assert_select "[data-demo='video-and-speech'] [data-availability]", text: "設定値が足りない（OpenAI、XAI）"
   end
 
   test "keeps the web search from running without OpenAI settings" do
@@ -187,15 +222,18 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
     assert_select "#search_web input[type=submit][value='実行する'][disabled]"
   end
 
-  test "keeps reading the answer aloud from running without OpenAI settings" do
+  # The demo is as runnable as its most runnable scenario, and the video
+  # needs only xAI.
+  test "keeps reading the answer aloud from running without OpenAI settings, while the video can still run" do
     with_openai_key(nil) { get root_path }
 
-    assert_select "[data-demo='video-and-speech'] [data-availability]", text: "設定値が足りない（OpenAI）"
+    assert_select "[data-demo='video-and-speech'] [data-availability]", text: "実行できる"
 
     with_openai_key(nil) { get demo_path("video-and-speech") }
 
     assert_select "#speak_answer [data-availability]", text: "設定値が足りない（OpenAI）"
     assert_select "#speak_answer input[type=submit][value='実行する'][disabled]"
+    assert_select "#generate_product_video input[type=submit][value='実行する']:not([disabled])"
   end
 
   test "shows the token count as runnable with its explanation, sources, code, and default inputs" do

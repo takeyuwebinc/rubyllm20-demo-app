@@ -26,6 +26,31 @@ module Demos
       assert_select "#answer_inquiry [data-input-error='inquiry']", text: "入力してください"
     end
 
+    test "records a product video run with its description and queues it" do
+      assert_difference(-> { Run.count }) do
+        with_xai_key("xai-test") do
+          post demo_runs_path("video-and-speech"), params: { run: { scenario_key: "generate_product_video", input: { description: "電気ケトル" } } }
+        end
+      end
+
+      run = Run.last
+      assert_redirected_to run_path(run)
+      assert_equal({ "description" => "電気ケトル" }, run.input)
+      assert_nil run.remote_job_id
+      assert_enqueued_with(job: RunJob, args: [ run ])
+    end
+
+    test "refuses a blank description for the product video" do
+      assert_no_difference(-> { Run.count }) do
+        with_xai_key("xai-test") do
+          post demo_runs_path("video-and-speech"), params: { run: { scenario_key: "generate_product_video", input: { description: " \n" } } }
+        end
+      end
+
+      assert_response :unprocessable_entity
+      assert_select "#generate_product_video [data-input-error='description']", text: "入力してください"
+    end
+
     test "records a ticket workflow run with its ticket and queues it" do
       assert_difference(-> { Run.count }) do
         with_openai_key("sk-test") do
