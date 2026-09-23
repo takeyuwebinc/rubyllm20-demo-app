@@ -17,7 +17,8 @@
         <div data-sentry-links class="flex flex-wrap items-center gap-3">
           <% newest, *older = run.trace_ids.reverse %>
           <% if newest %>
-            <%# While the run waits for a decision, 承認する is the page's one primary action. %>
+            <%# While the run waits for a decision, 承認する is the page's one primary action. Once the run has ended,
+                the trace is the main way to look into what happened, so the link takes the primary rank back. %>
             <%= link_to "Sentry でトレースを開く", sentry_trace_url(run, newest), target: "_blank", rel: "noopener",
                   class: run.awaiting_approval? ? "btn-secondary" : "btn-primary" %>
           <% end %>
