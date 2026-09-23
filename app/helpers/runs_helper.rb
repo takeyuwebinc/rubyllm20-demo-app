@@ -45,11 +45,15 @@ module RunsHelper
   end
 
   # The answer with a numbered mark at the end of the span each source
-  # supports, linking to the source in the list. end_index is a count of
-  # characters into the answer as it was recorded, so the answer is split at
-  # the marks first and each piece escaped after: escaping first would turn
-  # a < into &lt; and move every mark after it. Marks at the same place keep
-  # the order of their numbers.
+  # supports, linking to the source in the list. Marks rather than a list of
+  # the spans: Anthropic splits the answer at each claim, often in the middle
+  # of a sentence, so listing the spans would repeat the answer piece by
+  # piece. The mark shows where a claim ends as the answer is read.
+  #
+  # end_index is a count of characters into the answer as it was recorded,
+  # so the answer is split at the marks first and each piece escaped after:
+  # escaping first would turn a < into &lt; and move every mark after it.
+  # Marks at the same place keep the order of their numbers.
   def answer_with_citation_marks(answer, citations)
     marks = citations.each.with_index(1).filter_map do |citation, number|
       [ citation["end_index"], number ] if citation_marked?(citation, answer)

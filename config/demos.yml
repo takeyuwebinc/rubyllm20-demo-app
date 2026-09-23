@@ -81,7 +81,11 @@
       name: 返品ポリシーに基づいて回答する
       handler: Citations::AnswerFromReturnPolicy
       providers: [anthropic]
-      # A model the registry lists with citations and with PDF input.
+      # A model the registry lists with citations and with PDF input, the
+      # stronger one for quotes from a Japanese document, as cost is not
+      # capped. Should claude-sonnet-5 be refused, use the dated
+      # claude-haiku-4-5-20251001: the registry lists the alias
+      # claude-haiku-4-5 without citations, and RubyLLM then only warns.
       models:
         model: claude-sonnet-5
       inputs:
@@ -92,9 +96,12 @@
           # cost (page 1), the replacement filter (page 2), the refund (page 3).
           default: |-
             2 週間前に届いた空気清浄機（注文番号 E-50712）を、まだ開封していませんが、部屋に合わないので返品したいです。返品できますか。返送の送料はどちらの負担になりますか。返金はいつ、どのような方法で受けられますか。また、同じ箱で届いた交換用のフィルター（未開封）も一緒に返品できますか。
-      # A fixed PDF, so its pages and quotes stay the same from run to run.
-      # Remaking it leaves the sources of earlier runs pointing at pages
-      # that have changed.
+      # A PDF, because its pages are what a citation of a PDF adds: RubyLLM
+      # reads no position from a citation of a text document. A fixed one,
+      # made once from its HTML, so that no PDF gem or font comes into the
+      # app and the code shown stays RubyLLM's, and so that its pages and
+      # quotes stay the same from run to run. Remaking it leaves the sources
+      # of earlier runs pointing at pages that have changed.
       documents:
         - name: policy
           label: 返品ポリシー文書（PDF、3 ページ）

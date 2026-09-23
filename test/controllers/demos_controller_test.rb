@@ -291,6 +291,8 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  # TODO(once every demo has its explanation): remove this test, which then
+  # has no demo left to show it on.
   test "says the explanation comes with the scenario when a demo has none yet" do
     get demo_path("deep-research")
 
