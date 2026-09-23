@@ -28,6 +28,12 @@ module DemosHelper
     tag.div(safe_join(paragraphs), class: [ "space-y-3", css_class ])
   end
 
+  # A link, in a new tab, to a document the scenario hands its handler: the
+  # file itself, so a reader can check what the answer was based on.
+  def document_link(document)
+    link_to document.label, document.url, target: "_blank", rel: "noopener", class: "link-quiet"
+  end
+
   # The values to put in a scenario's inputs: what was just refused, else the
   # input of the run the page was opened from, else the defaults.
   def input_values_for(scenario)

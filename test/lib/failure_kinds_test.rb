@@ -34,15 +34,87 @@ class FailureKindsTest < ActiveSupport::TestCase
     assert_match "残高", FailureKinds.for(RubyLLM::RateLimitError.new).hint
   end
 
+  # RubyLLM raises the base error when a video or a research job fails,
+  # expires, or runs out of time, and for an HTTP status it has no class for.
+  test "names any other RubyLLM error a provider error, with causes to check" do
+    [
+      RubyLLM::Error.new("Video generation failed: expired"),
+      RubyLLM::Error.new("Video generation timed out after 1800 seconds"),
+      RubyLLM::ToolCallParseError.new("unexpected token")
+    ].each do |error|
+      kind = FailureKinds.for(error)
+
+      assert_equal "プロバイダーのエラー", kind.name, error.class.name
+      assert_match "メッセージを確かめる", kind.hint, error.class.name
+    end
+  end
+
+  # A generated video that holds only a URL is downloaded, outside RubyLLM's
+  # error handling, and its URL is only good for a while.
+  test "names a download the provider refused a failed download, with causes to check" do
+    [ Faraday::ResourceNotFound.new("404"), Faraday::ForbiddenError.new("403"), Faraday::ClientError.new("410") ].each do |error|
+      kind = FailureKinds.for(error)
+
+      assert_equal "取得の失敗", kind.name, error.class.name
+      assert_match "URL の期限切れ", kind.hint, error.class.name
+    end
+  end
+
+  # RubyLLM turns the HTTP errors of its requests to a provider's API into
+  # its own errors, so a bare Faraday error comes from a plain download.
+  test "names a download that failed at the provider or on the way a failed download, with causes to check" do
+    [ Faraday::ServerError.new("the server responded with status 503"), Faraday::SSLError.new("certificate verify failed") ].each do |error|
+      kind = FailureKinds.for(error)
+
+      assert_equal "取得の失敗", kind.name, error.class.name
+      assert_match "もう一度実行する", kind.hint, error.class.name
+      assert_no_match(/4xx/, kind.hint, error.class.name)
+      assert FailureKinds.provider_call?(error), error.class.name
+    end
+  end
+
+  test "names a subclass by its own row rather than the base rows" do
+    assert_equal "認証の失敗", FailureKinds.for(RubyLLM::UnauthorizedError.new("bad key")).name
+    assert_equal "サービス停止", FailureKinds.for(RubyLLM::ServiceUnavailableError.new("down")).name
+    assert_equal "タイムアウト", FailureKinds.for(Faraday::TimeoutError.new("slow")).name
+    assert_equal "接続の失敗", FailureKinds.for(Faraday::ConnectionFailed.new("refused")).name
+  end
+
   test "returns nil for an error outside the table" do
-    assert_nil FailureKinds.for(RubyLLM::ToolCallParseError.new)
     assert_nil FailureKinds.for(ArgumentError.new)
+    assert_nil FailureKinds.for(IOError.new("disk full"))
+  end
+
+  test "names an error from its class name" do
+    assert_equal "接続の失敗", FailureKinds.for_class_name("Faraday::ConnectionFailed").name
+    assert_equal "レート制限", FailureKinds.for_class_name("RubyLLM::RateLimitError").name
+  end
+
+  # A provider error the table does not list, known by the class it inherits.
+  class SlowDownError < RubyLLM::RateLimitError; end
+
+  test "judges a class name in the same order and by the same inheritance as an error" do
+    [ *FailureKinds::TABLE.keys, SlowDownError ].each do |error_class|
+      assert_equal FailureKinds.for(error_class.allocate), FailureKinds.for_class_name(error_class.name), error_class.name
+    end
+  end
+
+  test "returns nil for a class name it does not know, without raising" do
+    assert_nil FailureKinds.for_class_name("JSON::ParserError")
+    assert_nil FailureKinds.for_class_name("RubyLLM::NoSuchError")
+    assert_nil FailureKinds.for_class_name("not a constant")
+    assert_nil FailureKinds.for_class_name("RubyLLM::VERSION")
+    assert_nil FailureKinds.for_class_name("RubyLLM::VERSION::Error")
+    assert_nil FailureKinds.for_class_name(nil)
+    assert_nil FailureKinds.for_class_name("")
   end
 
   test "tells provider failures from bugs" do
     assert FailureKinds.provider_call?(RubyLLM::ToolCallParseError.new)
+    assert FailureKinds.provider_call?(RubyLLM::Error.new("Video generation failed: expired"))
     assert FailureKinds.provider_call?(RubyLLM::ModelNotFoundError.new("gpt-x"))
     assert FailureKinds.provider_call?(Faraday::ConnectionFailed.new("refused"))
+    assert FailureKinds.provider_call?(Faraday::ResourceNotFound.new("404"))
     refute FailureKinds.provider_call?(NoMethodError.new("content"))
   end
 

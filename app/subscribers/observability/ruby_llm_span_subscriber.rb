@@ -139,21 +139,40 @@ module Observability
       attributes.merge!(chat_attributes(payload)) if name == "chat.ruby_llm"
       attributes.merge!(speech_attributes(payload)) if name == "speech.ruby_llm"
       attributes.merge!(research_job_attributes(payload)) if name == "research_job.ruby_llm"
+      attributes.merge!(video_job_attributes(payload)) if name == "video_job.ruby_llm"
       attributes
     end
 
     # The voice and format are the ones the provider used once it answered,
-    # and the ones asked for when it failed. The text read aloud goes where
-    # a prompt goes; the output is audio, which the message attributes have
-    # no place for.
+    # and the ones asked for when it failed.
     def speech_attributes(payload)
-      attributes = {
+      {
         "ruby_llm.speech.voice" => payload[:voice]&.to_s,
         "ruby_llm.speech.format" => payload[:format]&.to_s,
         "ruby_llm.speech.audio_bytes" => payload[:audio_bytes]&.to_i
-      }
-      attributes.merge!(input_attributes(payload[:input])) if @capture_content
-      attributes
+      }.merge(generation_input_attributes(payload[:input]))
+    end
+
+    # The event covers only the submission. The provider renders the video
+    # afterwards, while the requests that poll it run outside this span, so
+    # the span has no output. The id is what the provider knows the work by,
+    # and is set only once the provider accepted it.
+    def video_job_attributes(payload)
+      {
+        "ruby_llm.video_job.id" => payload[:job_id]&.to_s,
+        "ruby_llm.video_job.options" => payload[:provider_options].presence&.to_json
+      }.merge(generation_input_attributes(payload[:prompt]))
+    end
+
+    # The text audio or video was generated from, or a research job's prompt,
+    # goes where a prompt goes. The output is audio or video, or arrives
+    # later, which the message attributes have no place for. Empty text is
+    # left out.
+    def generation_input_attributes(text)
+      return {} unless @capture_content
+
+      input = RubyLLM::Message.new(role: :user, content: text.to_s)
+      { "gen_ai.input.messages" => MessageFormatter.format([ input ]).presence&.to_json }
     end
 
     # A research job is submitted in this event and fetched later by
@@ -162,20 +181,11 @@ module Observability
     # its status are the ones the provider answered with, absent when the
     # submission failed.
     def research_job_attributes(payload)
-      attributes = {
+      {
         "ruby_llm.research.agent" => payload[:agent]&.to_s,
         "ruby_llm.research.job_id" => payload[:job_id]&.to_s,
         "ruby_llm.research.status" => payload[:status]&.to_s
-      }
-      attributes.merge!(input_attributes(payload[:prompt])) if @capture_content
-      attributes
-    end
-
-    # Text sent as the user's input, in the shape of a conversation's input
-    # messages. Empty text is left out.
-    def input_attributes(text)
-      input = RubyLLM::Message.new(role: :user, content: text.to_s)
-      { "gen_ai.input.messages" => MessageFormatter.format([ input ]).presence&.to_json }
+      }.merge(generation_input_attributes(payload[:prompt]))
     end
 
     def chat_attributes(payload)

@@ -33,6 +33,17 @@
         <%= form.hidden_field :scenario_key, value: scenario.key %>
         <% values = input_values_for(scenario) %>
 
+        <% if scenario.documents.any? %>
+          <div data-scenario-documents>
+            <p class="text-sm font-medium text-gray-700">添付する文書</p>
+            <ul class="mt-1 space-y-1">
+              <% scenario.documents.each do |document| %>
+                <li><%= document_link(document) %></li>
+              <% end %>
+            </ul>
+          </div>
+        <% end %>
+
         <% scenario.inputs.each do |input| %>
           <% field_id = "#{scenario.key}_#{input.name}" %>
           <% errors = refused_run&.input_errors(input.name) || [] %>

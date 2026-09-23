@@ -27,11 +27,12 @@ module Demos
         set(wait: RETRY_INTERVAL).perform_later(run)
       end
 
-      # Queues again or fails the runs of the given Solid Queue jobs, which a
-      # dead worker had claimed and Solid Queue will not run again.
-      def recover_abandoned(solid_queue_job_ids, error = nil)
+      # Hands the runs of the given Solid Queue jobs, which a dead worker had
+      # claimed and Solid Queue will not run again, to the run to fail or to
+      # queue again.
+      def fail_abandoned(solid_queue_job_ids, error = nil)
         runs = SolidQueue::Job.where(id: solid_queue_job_ids, class_name: name).filter_map { |job| run_from(job.arguments) }
-        Run.recover_abandoned!(runs.map(&:id), message: error&.message)
+        Run.fail_abandoned!(runs.map(&:id), message: error&.message)
       end
     end
 
@@ -41,25 +42,29 @@ module Demos
       return if run.finished? || run.awaiting_approval?
 
       scenario = run.scenario or raise ArgumentError, "Scenario #{run.scenario_key} is not defined"
-      # A run continues from what it kept of where it got to: the chat that
-      # stopped for approval, whose records hold how far it got, or the ID of
-      # the work it left with the provider. Either is safe however often the
-      # job runs. A chat, when there is one, is what the run stopped on.
-      handle = run.chat_id ? Chat.find(run.chat_id) : run.remote_job_id
+      # A run that stopped for approval continues its chat, whose records
+      # hold how far it got, so this is safe however often the job runs. A
+      # run that left work with the provider waits for it by the id it
+      # keeps, which is just as safe.
+      chat = Chat.find(run.chat_id) if run.chat_id
+      continued = chat || run.remote_job_id
       # Solid Queue puts a job back in the queue when its worker stops
-      # gracefully. A scenario that must not start over, and has nothing to
-      # continue from, has nothing to go on with.
-      if run.started_at && !scenario.retryable && !handle
+      # gracefully. A scenario that must not start over, and has neither a
+      # chat to continue nor work to wait for, has nothing to go on with.
+      if run.started_at && !scenario.retryable && !continued
         run.fail_as!(FailureKinds::INTERRUPTED)
         return
       end
 
       # A continued run keeps its started_at: it tells a job that ran again
       # from a first run, and dates the links to the run's traces.
-      run.update!(started_at: Time.current) unless handle
+      run.update!(started_at: Time.current) unless continued
+      # One workflow per job, so a run that is not interrupted leaves its
+      # work with the provider and collects it in one trace. A job that runs
+      # again adds a trace of its own to the same conversation.
       outcome = RubyLLM.workflow(workflow_name(scenario), metadata: { conversation_id: run.conversation_id }) do
         record_trace(run)
-        handle ? scenario.resume(handle) : start(run, scenario)
+        run_scenario(run, scenario, chat)
       end
       record(run, outcome)
     rescue StandardError => error
@@ -68,32 +73,36 @@ module Demos
 
     private
 
+    # Work left with the provider is waited for in this job, right after its
+    # id is kept. Waiting with RubyLLM.animate would keep no id, so a result
+    # that finished while the app was down could not be collected. Checking
+    # from a job scheduled every so often would open a workflow, and a trace,
+    # for every check, where waiting here keeps a run in one trace unless it
+    # is interrupted. The wait holds one of the worker's threads for as long
+    # as the work takes.
+    def run_scenario(run, scenario, chat)
+      return scenario.resume(chat) if chat
+      return scenario.resume_remote_job(run.remote_job_id) if run.remote_job_id
+
+      outcome = scenario.perform(run.input)
+      return outcome unless remote_job?(outcome)
+
+      # Kept before waiting, so that a job stopped while it waits goes on
+      # from the id instead of leaving the work, and paying for it, again.
+      run.record_remote_job_id!(outcome.id)
+      scenario.resume_remote_job(outcome.id)
+    end
+
+    # Work left with the provider, such as RubyLLM's VideoJob and
+    # ResearchJob, told apart by what it answers to rather than by its
+    # class. A result is a Hash and a chat has no pending?, so neither is
+    # mistaken for one.
+    def remote_job?(outcome)
+      outcome.respond_to?(:id) && outcome.respond_to?(:pending?)
+    end
+
     def workflow_name(scenario)
       "#{scenario.demo&.name}: #{scenario.name}"
-    end
-
-    # A scenario that leaves work with the provider hands back the work, and
-    # its ID is kept before the wait, so that a job that runs again waits for
-    # the same work. Until the ID is kept, a job put back has nothing to
-    # continue from, and the work it started goes unused.
-    #
-    # The wait runs in this job, so a run that is not interrupted is one
-    # trace with each poll a request in it; a job queued for every poll
-    # would split the run into a trace per poll. The wait holds one of the
-    # worker's threads for as long as the work takes.
-    def start(run, scenario)
-      started = scenario.perform(run.input)
-      return started unless remote_work?(started)
-
-      run.keep_remote_job_id!(started.id)
-      scenario.resume(started.id)
-    end
-
-    # Work kept at the provider is told by what it can do rather than by its
-    # class, as RubyLLM's ResearchJob has an id and knows whether it is
-    # still pending.
-    def remote_work?(value)
-      value.respond_to?(:id) && value.respond_to?(:pending?)
     end
 
     # A span is open only while its instrumented block runs, so the trace
