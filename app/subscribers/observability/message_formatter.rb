@@ -36,9 +36,10 @@ module Observability
       end
     end
 
-    # Steps the provider ran itself, such as a web search, as tool calls: what
-    # the model asked for, with which input. The call has a name only when the
-    # provider reports one; OpenAI's items have only their type.
+    # Steps the provider ran itself, such as a web search. The message shape
+    # has no part type for them, and a tool call is the nearest: it carries
+    # what the model asked for, with which input. The call has a name only when
+    # the provider reports one; OpenAI's items have only their type.
     #
     # Citations are not parts. The message shape has no type for them, and the
     # span of the answer they point to is already in the text part.

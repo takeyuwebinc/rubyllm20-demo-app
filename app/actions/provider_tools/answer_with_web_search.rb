@@ -38,6 +38,10 @@ module ProviderTools
     # opened, or a search within a page. The action's keys are strings in a
     # response and symbols once RubyLLM rebuilds the call from a Hash, as it
     # does for a recorded chat.
+    #
+    # The action is read rather than the call's raw item, because it is the
+    # value RubyLLM normalizes across providers; the raw item follows OpenAI's
+    # own shape.
     def search(call)
       action = call.input.is_a?(Hash) ? call.input.transform_keys(&:to_s) : {}
       {
