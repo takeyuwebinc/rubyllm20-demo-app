@@ -100,6 +100,7 @@ module Demos
       assert_predicate @run, :failed?
       assert_nil @run.result
       assert_equal "video-1", @run.remote_job_id
+      assert_equal "プロバイダーのエラー", @run.failure["kind"]
       assert_equal "Video generation failed: expired", @run.failure["message"]
     end
 
@@ -200,10 +201,11 @@ module Demos
       video.define_singleton_method(:to_blob) { raise Faraday::ResourceNotFound, "the server responded with status 404" }
       FakeHandler.outcome = { "video" => video, "model" => "grok-imagine-video-1.5" }
 
-      perform
+      assert_no_error_reported { perform }
 
       @run.reload
       assert_predicate @run, :failed?
+      assert_equal "取得の失敗", @run.failure["kind"]
       assert_equal "Faraday::ResourceNotFound", @run.failure["error_class"]
       assert_equal "the server responded with status 404", @run.failure["message"]
       assert_nil @run.result

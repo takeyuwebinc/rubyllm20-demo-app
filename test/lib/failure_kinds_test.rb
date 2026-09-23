@@ -34,15 +34,50 @@ class FailureKindsTest < ActiveSupport::TestCase
     assert_match "残高", FailureKinds.for(RubyLLM::RateLimitError.new).hint
   end
 
+  # RubyLLM raises the base error when a video or a research job fails,
+  # expires, or runs out of time, and for an HTTP status it has no class for.
+  test "names any other RubyLLM error a provider error, with causes to check" do
+    [
+      RubyLLM::Error.new("Video generation failed: expired"),
+      RubyLLM::Error.new("Video generation timed out after 1800 seconds"),
+      RubyLLM::ToolCallParseError.new("unexpected token")
+    ].each do |error|
+      kind = FailureKinds.for(error)
+
+      assert_equal "プロバイダーのエラー", kind.name, error.class.name
+      assert_match "メッセージを確かめる", kind.hint, error.class.name
+    end
+  end
+
+  # A generated video that holds only a URL is downloaded, outside RubyLLM's
+  # error handling, and its URL is only good for a while.
+  test "names a download the provider refused a failed download, with causes to check" do
+    [ Faraday::ResourceNotFound.new("404"), Faraday::ForbiddenError.new("403"), Faraday::ClientError.new("410") ].each do |error|
+      kind = FailureKinds.for(error)
+
+      assert_equal "取得の失敗", kind.name, error.class.name
+      assert_match "URL の期限切れ", kind.hint, error.class.name
+    end
+  end
+
+  test "names a subclass by its own row rather than the base rows" do
+    assert_equal "認証の失敗", FailureKinds.for(RubyLLM::UnauthorizedError.new("bad key")).name
+    assert_equal "サービス停止", FailureKinds.for(RubyLLM::ServiceUnavailableError.new("down")).name
+    assert_equal "タイムアウト", FailureKinds.for(Faraday::TimeoutError.new("slow")).name
+    assert_equal "接続の失敗", FailureKinds.for(Faraday::ConnectionFailed.new("refused")).name
+  end
+
   test "returns nil for an error outside the table" do
-    assert_nil FailureKinds.for(RubyLLM::ToolCallParseError.new)
     assert_nil FailureKinds.for(ArgumentError.new)
+    assert_nil FailureKinds.for(Faraday::ServerError.new("500"))
   end
 
   test "tells provider failures from bugs" do
     assert FailureKinds.provider_call?(RubyLLM::ToolCallParseError.new)
+    assert FailureKinds.provider_call?(RubyLLM::Error.new("Video generation failed: expired"))
     assert FailureKinds.provider_call?(RubyLLM::ModelNotFoundError.new("gpt-x"))
     assert FailureKinds.provider_call?(Faraday::ConnectionFailed.new("refused"))
+    assert FailureKinds.provider_call?(Faraday::ResourceNotFound.new("404"))
     refute FailureKinds.provider_call?(NoMethodError.new("content"))
   end
 
