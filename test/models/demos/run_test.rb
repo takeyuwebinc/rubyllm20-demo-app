@@ -283,8 +283,15 @@ module Demos
     end
 
     test "fails a run a dead worker left waiting on the provider once it has been tried again as often as allowed" do
-      run = create_run(started_at: 5.minutes.ago, failure: { "kind" => "接続の失敗", "retries" => Run::MAX_RETRIES })
+      run = create_run(started_at: 5.minutes.ago, failure: { "kind" => "接続の失敗", "retries" => Run::MAX_RETRIES - 1 })
       run.keep_remote_job_id!("interactions/abc")
+
+      Run.recover_abandoned!([ run.id ])
+
+      assert_predicate run.reload, :running?
+      assert_equal Run::MAX_RETRIES, run.retries
+      assert_enqueued_with(job: RunJob, args: [ run ])
+      clear_enqueued_jobs
 
       Run.recover_abandoned!([ run.id ])
 

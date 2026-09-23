@@ -79,6 +79,15 @@ class FailureKindsTest < ActiveSupport::TestCase
     assert_equal "調査の失敗", FailureKinds.for(unknown).name
   end
 
+  test "names a wait that ran past its deadline during a poll after the deadline, not after what interrupted the poll" do
+    # RubyLLM interrupts a poll that would run past the deadline with an
+    # error of its own that the table does not know.
+    deadline = with_cause(RubyLLM::ResearchJob::TimeoutError.new("Research request timed out (job j1)", job: research_job(:pending)), StandardError.new("deadline"))
+
+    assert_equal "待ち時間の上限", FailureKinds.for(deadline).name
+    refute FailureKinds.retry_later?(deadline)
+  end
+
   test "points out that Vertex AI's Deep Research is limited by the project's quota" do
     assert_match "Vertex AI", FailureKinds.for(RubyLLM::RateLimitError.new).hint
     assert_match "クォータ", FailureKinds.for(RubyLLM::RateLimitError.new).hint

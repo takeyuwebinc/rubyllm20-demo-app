@@ -378,9 +378,16 @@ module Demos
     end
 
     test "fails a run waiting on the provider once it has been tried again as often as allowed" do
-      @run.update!(failure: { "kind" => "接続の失敗", "retries" => Run::MAX_RETRIES })
+      @run.update!(failure: { "kind" => "接続の失敗", "retries" => Run::MAX_RETRIES - 1 })
       @run.keep_remote_job_id!("interactions/abc")
       FakeHandler.resume_outcome = -> { raise Faraday::ConnectionFailed, "refused" }
+
+      perform(retryable: false)
+
+      assert_predicate @run.reload, :running?
+      assert_equal Run::MAX_RETRIES, @run.retries
+      assert_enqueued_with(job: RunJob, args: [ @run ])
+      clear_enqueued_jobs
 
       perform(retryable: false)
 
@@ -416,6 +423,25 @@ module Demos
       assert_equal "期限切れ", @run.failure["kind"]
       assert_equal "Requested entity was not found.", @run.failure["message"]
       assert_no_enqueued_jobs only: RunJob
+    end
+
+    test "fails as its kind, not as expired, a 404 on a run that kept no ID" do
+      FakeHandler.outcome = -> { raise RubyLLM::Error.new("Not found", response: Data.define(:status, :body).new(404, "")) }
+
+      perform(retryable: false)
+
+      assert_predicate @run.reload, :failed?
+      assert_equal "RubyLLM::Error", @run.failure["kind"]
+    end
+
+    test "records a cancellation whether or not the run kept an ID" do
+      FakeHandler.outcome = -> { raise RubyLLM::ResearchJob::Error.new("Research cancelled:  (job abc)", job: RemoteWork.new("abc", :cancelled)) }
+
+      perform(retryable: false)
+
+      assert_predicate @run.reload, :cancelled?
+      assert_nil @run.remote_job_id
+      assert_equal "取り消し", @run.failure["kind"]
     end
 
     test "queues a run again after a minute" do
