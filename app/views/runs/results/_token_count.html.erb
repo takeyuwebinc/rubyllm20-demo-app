@@ -1,4 +1,5 @@
-<%# The verdict and what is left come from the result as the action judged them. Neither exists for a model with no known context window. %>
+<%# The verdict and what is left come from the result as the action judged them. Neither exists for a model with no known context window.
+    The excess is shown for a negative room only: an input as long as the window leaves nothing, which reads as 0 rather than as 0 over. %>
 <% result = run.result %>
 <% known = !result["fits"].nil? %>
 <div data-token-count class="max-w-prose space-y-4">
