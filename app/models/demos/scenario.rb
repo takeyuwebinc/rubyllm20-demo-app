@@ -69,9 +69,11 @@ module Demos
       handler.decide(chat, tool_call_id, approved:)
     end
 
-    # Continues the run's chat after a decision. Returns as perform does.
-    def resume(chat)
-      handler.resume(chat)
+    # Continues the run from what it kept: the chat, after a decision, or the
+    # ID of the work the handler left with the provider. Returns as perform
+    # does.
+    def resume(handle)
+      handler.resume(handle)
     end
 
     private

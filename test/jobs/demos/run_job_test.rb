@@ -19,6 +19,13 @@ module Demos
       end
     end
 
+    # Work left with the provider as RubyLLM's ResearchJob is: an id, and
+    # whether it is still pending. An error of a job's wait holds it.
+    RemoteWork = Data.define(:id, :status) do
+      def pending? = status == :pending
+      def cancelled? = status == :cancelled
+    end
+
     # Answers each question, or each count, with the next scripted answer, in
     # place of a chat with a provider, and keeps the questions it was given.
     class ScriptedChat
@@ -39,6 +46,7 @@ module Demos
       alias_method :count_tokens, :ask
     end
 
+    include ActiveJob::TestHelper
     include ScreenHelpers
     include ChatHelpers
 
@@ -233,6 +241,189 @@ module Demos
       assert_nil @run.result
       assert_equal "サーバー側のエラー", @run.failure["kind"]
       assert_equal "denied", @run.approval_requests.sole["decision"]
+    end
+
+    test "keeps the ID of work the scenario left with the provider, then waits for it in the same workflow" do
+      FakeHandler.outcome = RemoteWork.new("interactions/abc", :pending)
+      seen_while_waiting = {}
+      FakeHandler.resume_outcome = lambda do
+        seen_while_waiting[:remote_job_id] = @run.reload.remote_job_id
+        seen_while_waiting[:trace_id] = OpenTelemetry::Trace.current_span.context.hex_trace_id
+        { "report" => "調査の結果" }
+      end
+
+      workflow_span = with_tracing { perform(retryable: false) }
+
+      assert_equal 1, FakeHandler.calls.size
+      assert_equal [ "interactions/abc" ], FakeHandler.resumed
+      assert_equal "interactions/abc", seen_while_waiting[:remote_job_id]
+      assert_equal workflow_span.hex_trace_id, seen_while_waiting[:trace_id]
+      @run.reload
+      assert_predicate @run, :succeeded?
+      assert_equal({ "report" => "調査の結果" }, @run.result)
+      assert_equal "interactions/abc", @run.remote_job_id
+      assert_equal [ workflow_span.hex_trace_id ], @run.trace_ids
+    end
+
+    test "waits for the work kept at the provider when the job runs again, instead of starting over" do
+      started_at = 5.minutes.ago.round
+      @run.update!(started_at: started_at)
+      @run.keep_remote_job_id!("interactions/abc")
+
+      perform(retryable: false)
+
+      assert_empty FakeHandler.calls
+      assert_equal [ "interactions/abc" ], FakeHandler.resumed
+      @run.reload
+      assert_predicate @run, :succeeded?
+      assert_equal({ "answer" => "Refunded." }, @run.result)
+      assert_equal started_at, @run.started_at
+    end
+
+    test "continues the chat of a run that also kept the ID of work at the provider" do
+      @run = create_awaiting_run
+      @run.resume!("call_1", "approved")
+      @run.keep_remote_job_id!("interactions/abc")
+
+      perform(retryable: false)
+
+      assert_equal [ @run.chat_id ], FakeHandler.resumed.map(&:id)
+      assert_predicate @run.reload, :succeeded?
+    end
+
+    test "does not try a chat again when continuing it fails in a way that may pass" do
+      @run = create_awaiting_run
+      @run.resume!("call_1", "approved")
+      @run.keep_remote_job_id!("interactions/abc")
+      FakeHandler.resume_outcome = -> { raise RubyLLM::ServerError, "boom" }
+
+      # Deciding queued a job already; only what continuing the chat queues counts.
+      assert_no_enqueued_jobs(only: RunJob) { perform(retryable: false) }
+
+      assert_predicate @run.reload, :failed?
+      assert_equal "サーバー側のエラー", @run.failure["kind"]
+    end
+
+    test "fails a run whose research failed, keeping its ID, without reporting it" do
+      @run.keep_remote_job_id!("interactions/abc")
+      FakeHandler.resume_outcome = -> { raise RubyLLM::ResearchJob::Error.new("Research failed: boom (job abc)", job: RemoteWork.new("abc", :failed)) }
+
+      assert_no_error_reported { perform(retryable: false) }
+
+      @run.reload
+      assert_predicate @run, :failed?
+      assert_equal "調査の失敗", @run.failure["kind"]
+      assert_equal "Research failed: boom (job abc)", @run.failure["message"]
+      assert_equal "interactions/abc", @run.remote_job_id
+      assert_no_enqueued_jobs only: RunJob
+    end
+
+    test "fails a run whose wait ran past its deadline" do
+      @run.keep_remote_job_id!("interactions/abc")
+      FakeHandler.resume_outcome = -> { raise RubyLLM::ResearchJob::TimeoutError.new("Research timed out (job abc)", job: RemoteWork.new("abc", :pending)) }
+
+      assert_no_error_reported { perform(retryable: false) }
+
+      assert_predicate @run.reload, :failed?
+      assert_equal "待ち時間の上限", @run.failure["kind"]
+      assert_no_enqueued_jobs only: RunJob
+    end
+
+    test "tries a run waiting on the provider again a minute later when fetching the work fails in a way that may pass" do
+      job = RemoteWork.new("abc", :pending)
+      [
+        -> { raise RubyLLM::UnauthorizedError, "invalid_grant" },
+        -> { raise Faraday::ConnectionFailed, "refused" },
+        -> { raise RubyLLM::ServerError, "boom" },
+        -> { raise RubyLLM::ResearchJob::TimeoutError.new("Research request timed out (job abc)", job: job), cause: Faraday::TimeoutError.new("slow") }
+      ].each.with_index(1) do |failure, count|
+        FakeHandler.resume_outcome = failure
+        @run.keep_remote_job_id!("interactions/abc")
+
+        freeze_time do
+          assert_no_error_reported { perform(retryable: false) }
+
+          assert_enqueued_with(job: RunJob, args: [ @run ], at: 1.minute.from_now)
+        end
+        @run.reload
+        assert_predicate @run, :running?, count
+        assert_nil @run.finished_at
+        assert_equal count, @run.retries
+      end
+      assert_equal "タイムアウト", @run.failure["kind"]
+    end
+
+    test "tries again a minute later when the wait that follows the submission fails in a way that may pass" do
+      FakeHandler.outcome = RemoteWork.new("interactions/abc", :pending)
+      FakeHandler.resume_outcome = -> { raise RubyLLM::UnauthorizedError, "invalid_rapt" }
+
+      assert_no_error_reported { perform(retryable: false) }
+
+      @run.reload
+      assert_predicate @run, :running?
+      assert_equal "interactions/abc", @run.remote_job_id
+      assert_equal "認証の失敗", @run.failure["kind"]
+      assert_enqueued_with(job: RunJob, args: [ @run ])
+    end
+
+    test "fails a submission that fails in a way that may pass, as nothing was left at the provider" do
+      FakeHandler.outcome = -> { raise RubyLLM::RateLimitError, "Quota exceeded" }
+
+      perform(retryable: false)
+
+      assert_predicate @run.reload, :failed?
+      assert_equal "レート制限", @run.failure["kind"]
+      assert_nil @run.remote_job_id
+      assert_no_enqueued_jobs only: RunJob
+    end
+
+    test "fails a run waiting on the provider once it has been tried again as often as allowed" do
+      @run.update!(failure: { "kind" => "接続の失敗", "retries" => Run::MAX_RETRIES })
+      @run.keep_remote_job_id!("interactions/abc")
+      FakeHandler.resume_outcome = -> { raise Faraday::ConnectionFailed, "refused" }
+
+      perform(retryable: false)
+
+      assert_predicate @run.reload, :failed?
+      assert_equal "接続の失敗", @run.failure["kind"]
+      assert_equal "refused", @run.failure["message"]
+      assert_no_enqueued_jobs only: RunJob
+    end
+
+    test "records that the provider cancelled the work, without reporting it" do
+      @run.keep_remote_job_id!("interactions/abc")
+      FakeHandler.resume_outcome = -> { raise RubyLLM::ResearchJob::Error.new("Research cancelled: stopped by user (job abc)", job: RemoteWork.new("abc", :cancelled)) }
+
+      assert_no_error_reported { perform(retryable: false) }
+
+      @run.reload
+      assert_predicate @run, :cancelled?
+      assert_not_nil @run.finished_at
+      assert_equal "取り消し", @run.failure["kind"]
+      assert_equal "Research cancelled: stopped by user (job abc)", @run.failure["message"]
+      assert_no_enqueued_jobs only: RunJob
+    end
+
+    test "fails as expired a run whose work the provider no longer has" do
+      @run.keep_remote_job_id!("interactions/abc")
+      not_found = RubyLLM::Error.new("Requested entity was not found.", response: Data.define(:status, :body).new(404, ""))
+      FakeHandler.resume_outcome = -> { raise not_found }
+
+      assert_no_error_reported { perform(retryable: false) }
+
+      @run.reload
+      assert_predicate @run, :failed?
+      assert_equal "期限切れ", @run.failure["kind"]
+      assert_equal "Requested entity was not found.", @run.failure["message"]
+      assert_no_enqueued_jobs only: RunJob
+    end
+
+    test "queues a run again after a minute" do
+      freeze_time do
+        RunJob.retry_later(@run)
+
+        assert_enqueued_with(job: RunJob, args: [ @run ], at: 1.minute.from_now)
+      end
     end
 
     test "fails the run when its scenario is no longer defined" do

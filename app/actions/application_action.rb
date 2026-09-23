@@ -18,6 +18,15 @@
 # .decide(chat, tool_call_id, approved:), which records the decision, and
 # .resume(chat), which continues the chat and again returns a result or the
 # chat if it stopped once more.
+#
+# An action that leaves work with the provider, such as a research job,
+# returns that work as RubyLLM returned it: anything with id and pending?.
+# Its class then also has .resume(id), which waits for the work by its ID
+# and returns the result. The job keeps the ID with the run as soon as the
+# work is returned, and then calls .resume, so a job that runs again waits
+# for the same work instead of starting another. When waiting fails in a
+# way that may pass, the job tries .resume again later; .resume only lets
+# the error propagate.
 class ApplicationAction
   def self.perform(...)
     new(...).perform

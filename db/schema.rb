@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[8.1].define(version: 2026_09_22_120001) do
+ActiveRecord::Schema[8.1].define(version: 2026_09_23_053328) do
   create_table "active_storage_attachments", force: :cascade do |t|
     t.bigint "blob_id", null: false
     t.datetime "created_at", null: false
@@ -55,6 +55,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_22_120001) do
     t.json "failure"
     t.datetime "finished_at"
     t.json "input", default: {}, null: false
+    t.string "remote_job_id"
     t.json "result"
     t.string "scenario_key", null: false
     t.datetime "started_at"
