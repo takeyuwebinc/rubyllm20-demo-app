@@ -126,6 +126,10 @@ module Demos
     # transaction begins, so a download inside one would hold up every other
     # write for as long as it takes. to_blob keeps nothing, so each file is
     # read once. A download that fails raises before anything is written.
+    # The download is done here rather than by the scenario's handler: since
+    # to_blob keeps nothing, a handler that fetched first would have to wrap
+    # the bytes in a type of this app's, and the demo shows its code as
+    # RubyLLM code.
     #
     # The files are uploaded inside the transaction that records the result,
     # so a failure part way leaves no attachment, no result, and the status

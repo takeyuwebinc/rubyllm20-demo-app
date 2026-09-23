@@ -62,7 +62,9 @@ module VideoAndSpeech
     # builds the job the way RubyLLM's own animate_later does, from methods
     # its guides do not document; the gem's version is pinned, which keeps
     # it working. The job starts pending, because xAI's video is read from
-    # the state that wait fetches.
+    # the state that wait fetches. Polling xAI's state endpoint directly
+    # instead would need the same undocumented connection and could not use
+    # wait and video; submitting the video again would pay for it again.
     # TODO(when RubyLLM can find a VideoJob by its id): use that instead.
     def self.reopen(id, model:)
       model_info, provider = RubyLLM::Models.resolve(model, provider: :xai)

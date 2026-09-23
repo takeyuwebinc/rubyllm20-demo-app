@@ -68,6 +68,12 @@ module Demos
 
     private
 
+    # Work left with the provider is waited for in this job, right after its
+    # id is kept. Waiting with RubyLLM.animate would keep no id, so a result
+    # that finished while the app was down could not be collected. Checking
+    # from a job scheduled every so often would open a workflow, and a trace,
+    # for every check, where waiting here keeps a run in one trace unless it
+    # is interrupted.
     def run_scenario(run, scenario, chat)
       return scenario.resume(chat) if chat
       return scenario.resume_remote_job(run.remote_job_id) if run.remote_job_id
