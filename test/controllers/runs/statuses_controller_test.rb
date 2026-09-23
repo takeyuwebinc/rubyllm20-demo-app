@@ -22,6 +22,27 @@ module Runs
       assert_shows_speech(run)
     end
 
+    test "returns the research report and the job ID of a run that succeeded" do
+      run = create_research_run(result: research_result)
+
+      get run_status_path(run)
+
+      assert_no_match(/<html/, response.body)
+      assert_select "[data-remote-job-id]", text: /v1_research/
+      assert_select "[data-research-report] [data-report]", text: /通信販売には法定のクーリング・オフがない。/
+      assert_select "[data-research-report] [data-citation]", 1
+      assert_select "[data-research-report] [data-cost]", text: /不明/
+    end
+
+    test "returns that a run waiting on the provider will be tried again" do
+      run = create_research_run.tap { |r| r.retry_later!(Faraday::ConnectionFailed.new("refused")) }
+
+      get run_status_path(run)
+
+      assert_select "[data-retry]", text: /1 回目、上限 60 回/
+      assert_select "[data-controller='poll'][data-poll-active-value='true']"
+    end
+
     test "returns the generated product video of a run that succeeded" do
       run = create_product_video_run
 

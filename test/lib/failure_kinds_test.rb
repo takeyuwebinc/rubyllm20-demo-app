@@ -123,9 +123,121 @@ class FailureKindsTest < ActiveSupport::TestCase
     assert_match "もう一度実行", FailureKinds::WORKER_LOST.hint
   end
 
+  test "names a research job that failed and a wait that ran out of time" do
+    job = research_job(:failed)
+    timeout = FailureKinds.for(RubyLLM::ResearchJob::TimeoutError.new("Research timed out (job j1)", job: research_job(:pending)))
+    failure = FailureKinds.for(RubyLLM::ResearchJob::Error.new("Research failed: boom (job j1)", job: job))
+
+    assert_equal "待ち時間の上限", timeout.name
+    assert_match "ジョブ ID", timeout.hint
+    # The limit is the handler's own; the hint does not repeat its number.
+    refute_match(/\d+\s*分/, timeout.hint)
+    assert_equal "調査の失敗", failure.name
+    assert_match "メッセージ", failure.hint
+    assert FailureKinds.provider_call?(RubyLLM::ResearchJob::TimeoutError.new("t", job: job))
+    assert FailureKinds.provider_call?(RubyLLM::ResearchJob::Error.new("e", job: job))
+  end
+
+  test "names a research error that wraps a known error after the error it wraps" do
+    job = research_job(:pending)
+
+    unauthorized = with_cause(RubyLLM::ResearchJob::Error.new("Research request failed: denied (job j1)", job: job), RubyLLM::UnauthorizedError.new("denied"))
+    slow_poll = with_cause(RubyLLM::ResearchJob::TimeoutError.new("Research request timed out (job j1)", job: job), Faraday::TimeoutError.new("slow"))
+    unknown = with_cause(RubyLLM::ResearchJob::Error.new("Research request failed: odd (job j1)", job: job), ArgumentError.new("odd"))
+
+    assert_equal "認証の失敗", FailureKinds.for(unauthorized).name
+    assert_equal FailureKinds.for(RubyLLM::UnauthorizedError.new).hint, FailureKinds.for(unauthorized).hint
+    assert_equal "タイムアウト", FailureKinds.for(slow_poll).name
+    assert_equal "調査の失敗", FailureKinds.for(unknown).name
+  end
+
+  test "names a wait that ran past its deadline during a poll after the deadline, not after what interrupted the poll" do
+    # RubyLLM interrupts a poll that would run past the deadline with an
+    # error of its own that the table does not know.
+    deadline = with_cause(RubyLLM::ResearchJob::TimeoutError.new("Research request timed out (job j1)", job: research_job(:pending)), StandardError.new("deadline"))
+
+    assert_equal "待ち時間の上限", FailureKinds.for(deadline).name
+    refute FailureKinds.retry_later?(deadline)
+  end
+
+  test "points out that Vertex AI's Deep Research is limited by the project's quota" do
+    assert_match "Vertex AI", FailureKinds.for(RubyLLM::RateLimitError.new).hint
+    assert_match "クォータ", FailureKinds.for(RubyLLM::RateLimitError.new).hint
+  end
+
+  test "describes work the provider cancelled and work it no longer has" do
+    assert_equal "取り消し", FailureKinds::CANCELLED.name
+    assert_match "取り消", FailureKinds::CANCELLED.hint
+    assert_equal "期限切れ", FailureKinds::EXPIRED.name
+    assert_match "7 日", FailureKinds::EXPIRED.hint
+    assert_match "ID", FailureKinds::EXPIRED.hint
+  end
+
+  test "tells a cancelled research job only from the job the error holds" do
+    assert FailureKinds.cancelled?(RubyLLM::ResearchJob::Error.new("Research cancelled:  (job j1)", job: research_job(:cancelled)))
+    refute FailureKinds.cancelled?(RubyLLM::ResearchJob::Error.new("Research failed: boom (job j1)", job: research_job(:failed)))
+    refute FailureKinds.cancelled?(RubyLLM::ResearchJob::TimeoutError.new("Research timed out (job j1)", job: research_job(:pending)))
+    refute FailureKinds.cancelled?(RubyLLM::Error.new("cancelled"))
+    refute FailureKinds.cancelled?(ArgumentError.new)
+  end
+
+  test "tells work the provider cannot find from a 404 response of the error or of the error it wraps" do
+    not_found = RubyLLM::Error.new("Not found", response: http_response(404))
+
+    assert FailureKinds.not_found?(not_found)
+    assert FailureKinds.not_found?(with_cause(RubyLLM::ResearchJob::Error.new("Research request failed (job j1)", job: research_job(:pending)), not_found))
+    refute FailureKinds.not_found?(RubyLLM::ServerError.new("boom", response: http_response(500)))
+    refute FailureKinds.not_found?(RubyLLM::Error.new("no response"))
+    refute FailureKinds.not_found?(ArgumentError.new)
+  end
+
+  test "tells failures worth trying again later from the ones that will fail the same way" do
+    job = research_job(:pending)
+    later = [
+      Faraday::TimeoutError.new("slow"),
+      Faraday::ConnectionFailed.new("refused"),
+      RubyLLM::ServerError.new,
+      RubyLLM::OverloadedError.new,
+      RubyLLM::ServiceUnavailableError.new,
+      RubyLLM::RateLimitError.new,
+      RubyLLM::UnauthorizedError.new,
+      with_cause(RubyLLM::ResearchJob::Error.new("Research request failed (job j1)", job: job), RubyLLM::UnauthorizedError.new),
+      with_cause(RubyLLM::ResearchJob::TimeoutError.new("Research request timed out (job j1)", job: job), Faraday::TimeoutError.new("slow"))
+    ]
+    final = [
+      RubyLLM::ResearchJob::TimeoutError.new("Research timed out (job j1)", job: job),
+      RubyLLM::ResearchJob::Error.new("Research failed: boom (job j1)", job: research_job(:failed)),
+      RubyLLM::BadRequestError.new,
+      RubyLLM::ForbiddenError.new,
+      RubyLLM::ConfigurationError.new("missing"),
+      ArgumentError.new
+    ]
+
+    later.each { |error| assert FailureKinds.retry_later?(error), error.inspect }
+    final.each { |error| refute FailureKinds.retry_later?(error), error.inspect }
+  end
+
   test "describes a job that was put back with nothing to continue from" do
     assert_equal "ジョブの中断", FailureKinds::INTERRUPTED.name
     assert_match "再開できる記録がない", FailureKinds::INTERRUPTED.hint
     assert_match "もう一度実行", FailureKinds::INTERRUPTED.hint
+  end
+
+  private
+
+  # Only the job's state is read from an error, so a stand-in answers for it.
+  def research_job(status)
+    Data.define(:status) { def cancelled? = status == :cancelled }.new(status)
+  end
+
+  def http_response(status)
+    Data.define(:status, :body).new(status, "")
+  end
+
+  # The error as RubyLLM raises it while handling +cause+.
+  def with_cause(error, cause)
+    raise error, cause: cause
+  rescue StandardError => raised
+    raised
   end
 end

@@ -1,0 +1,10 @@
+<%# Why a run failed, was cancelled, or is being tried again, as the run recorded it. %>
+<p class="font-semibold <%= title_class %>">
+  <%= failure["kind"] %><% if failure["provider"].present? %>（<%= failure["provider"] %>）<% end %>
+</p>
+<% if failure["message"].present? %>
+  <p class="mt-2 whitespace-pre-wrap break-words text-sm <%= message_class %>"><%= failure["message"] %></p>
+<% end %>
+<% if failure["hint"].present? %>
+  <p class="mt-2 text-sm text-gray-700">原因の候補: <%= failure["hint"] %></p>
+<% end %>

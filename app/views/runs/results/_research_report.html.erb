@@ -1,0 +1,96 @@
+<%# The report, its sources, and its steps are what the provider reported, and any of them may be missing. The URLs come from the
+    model, so they become links only through model_url_link. The report's Markdown is shown as written, as a chat's answer is. %>
+<% result = run.result %>
+<% citations = result["citations"] || [] %>
+<% steps = result["steps"] || [] %>
+<% tokens = result["tokens"] || {} %>
+<div data-research-report class="max-w-prose space-y-6">
+  <% unless result["completed"] %>
+    <p data-incomplete class="rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+      途中で打ち切られた（プロバイダーの状態: <%= result["provider_status"] %>）。
+    </p>
+  <% end %>
+
+  <section>
+    <h2 class="text-base font-semibold text-gray-700">レポート</h2>
+    <div data-report class="mt-2 whitespace-pre-wrap break-words leading-relaxed text-gray-900"><%= result["report"] %></div>
+  </section>
+
+  <section>
+    <h2 class="text-base font-semibold text-gray-700">出典</h2>
+    <% if citations.any? %>
+      <ol class="mt-2 space-y-3 text-sm">
+        <% citations.each do |citation| %>
+          <li data-citation class="break-words text-gray-900">
+            <% if citation["title"].present? %>
+              <p><%= model_url_link(citation["title"], citation["url"]) %></p>
+              <% if citation["url"].present? %>
+                <p class="break-all text-xs text-gray-500"><%= citation["url"] %></p>
+              <% end %>
+            <% elsif citation["url"].present? %>
+              <p class="break-all"><%= model_url_link(citation["url"], citation["url"]) %></p>
+            <% end %>
+            <% if citation["text"].present? %>
+              <p class="mt-1 text-gray-700">レポートの該当箇所: <%= citation["text"] %></p>
+            <% end %>
+            <% if citation["cited_text"].present? %>
+              <p class="mt-1 text-gray-700">引用の断片: <%= citation["cited_text"] %></p>
+            <% end %>
+          </li>
+        <% end %>
+      </ol>
+    <% else %>
+      <p class="mt-2 text-sm text-gray-500">出典なし</p>
+    <% end %>
+  </section>
+
+  <section>
+    <h2 class="text-base font-semibold text-gray-700">プロバイダー側の手順</h2>
+    <% if steps.any? %>
+      <ol class="mt-2 space-y-2 text-sm">
+        <% steps.each do |step| %>
+          <% detail = step["input"].nil? ? step["result"] : step["input"] %>
+          <li data-step class="space-y-1">
+            <p class="flex flex-wrap items-center gap-2">
+              <code class="rounded bg-gray-100 px-1 py-0.5 text-gray-700"><%= step["type"] %></code>
+              <% if step["name"].present? %>
+                <span class="text-gray-900"><%= step["name"] %></span>
+              <% end %>
+            </p>
+            <% unless detail.nil? %>
+              <pre class="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded bg-gray-50 p-2 text-xs text-gray-800"><%= detail.is_a?(String) ? detail : JSON.generate(detail) %></pre>
+            <% end %>
+          </li>
+        <% end %>
+      </ol>
+    <% else %>
+      <p class="mt-2 text-sm text-gray-500">手順の報告なし</p>
+    <% end %>
+  </section>
+
+  <% if result["thinking"].present? %>
+    <details data-thinking class="text-sm">
+      <summary class="cursor-pointer font-semibold text-gray-700">思考の要約</summary>
+      <div class="mt-2 whitespace-pre-wrap break-words text-gray-800"><%= result["thinking"] %></div>
+    </details>
+  <% end %>
+
+  <dl class="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-sm">
+    <dt class="text-gray-500">入力トークン数</dt>
+    <dd data-tokens="input" class="text-gray-800"><%= tokens["input"] ? number_with_delimiter(tokens["input"]) : "—" %></dd>
+    <dt class="text-gray-500">出力トークン数（思考を含む）</dt>
+    <dd data-tokens="output" class="text-gray-800"><%= tokens["output"] ? number_with_delimiter(tokens["output"]) : "—" %></dd>
+    <dt class="text-gray-500">思考トークン数</dt>
+    <dd data-tokens="thinking" class="text-gray-800"><%= tokens["thinking"] ? number_with_delimiter(tokens["thinking"]) : "—" %></dd>
+    <dt class="text-gray-500">キャッシュ読み出しトークン数</dt>
+    <dd data-tokens="cache_read" class="text-gray-800"><%= tokens["cache_read"] ? number_with_delimiter(tokens["cache_read"]) : "—" %></dd>
+    <dt class="text-gray-500">コスト</dt>
+    <% if result["cost"] %>
+      <dd data-cost class="text-gray-800"><%= number_to_currency(result["cost"], unit: "$", precision: 4) %></dd>
+    <% else %>
+      <dd data-cost class="text-gray-800">不明（Vertex AI は金額を返さず、エージェントには単価がない）</dd>
+    <% end %>
+  </dl>
+
+  <p class="text-sm text-gray-500">エージェント: <%= result["agent"] %></p>
+</div>

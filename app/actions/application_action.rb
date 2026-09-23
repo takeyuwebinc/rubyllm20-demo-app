@@ -20,13 +20,17 @@
 # chat if it stopped once more.
 #
 # An action that leaves work with the provider, such as a video that takes
-# minutes to generate, returns what RubyLLM returned for it, such as the
-# VideoJob of RubyLLM.animate_later: anything with id and pending?. The job
-# that runs the action keeps the id with the run right away, then calls
-# .resume(id, **models), which waits for the work to finish and returns a
-# result, or raises. A job that runs again after it was stopped calls
-# .resume with the kept id instead of #perform, so the work is neither
-# left nor paid for twice.
+# minutes to generate or a research job, returns what RubyLLM returned for
+# it, such as the VideoJob of RubyLLM.animate_later or the ResearchJob of
+# RubyLLM.research_later: anything with id and pending?. It keeps no record
+# of the id itself, so that it stays plain RubyLLM code with nothing of the
+# run in it. The job that runs the action keeps the id with the run right
+# away, then calls .resume(id, **models), which waits for the work to
+# finish and returns a result, or raises. A job that runs again after it
+# was stopped calls .resume with the kept id instead of #perform, so the
+# work is neither left nor paid for twice. When waiting fails in a way that
+# may pass, the job tries .resume again later; .resume only lets the error
+# propagate.
 class ApplicationAction
   def self.perform(...)
     new(...).perform

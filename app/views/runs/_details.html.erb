@@ -45,6 +45,17 @@
     <% end %>
   </div>
 
+  <% if run.running? && run.retries.positive? %>
+    <section data-retry class="max-w-prose rounded-md border border-amber-200 bg-amber-50 p-4">
+      <p class="text-sm text-amber-900">
+        続きの取得に失敗し、<%= Demos::RunJob::RETRY_INTERVAL.in_minutes.to_i %> 分後にやり直す（<%= run.retries %> 回目、上限 <%= Demos::Run::MAX_RETRIES %> 回）。
+      </p>
+      <div class="mt-3">
+        <%= render "runs/failure_reason", failure: run.failure, title_class: "text-amber-900", message_class: "text-amber-950" %>
+      </div>
+    </section>
+  <% end %>
+
   <% if run.awaiting_approval? %>
     <section data-approval class="max-w-prose space-y-4 rounded-md border border-amber-200 bg-amber-50 p-4">
       <h2 class="font-semibold text-amber-900">AI がツールの実行を提案している</h2>
@@ -76,18 +87,10 @@
     </div>
   <% end %>
 
-  <% if run.failed? %>
-    <% failure = run.failure || {} %>
+  <%# A cancellation keeps its reason where a failure does, and is shown the same way. %>
+  <% if run.failed? || run.cancelled? %>
     <section data-failure class="max-w-prose rounded-md border border-red-200 bg-red-50 p-4">
-      <p class="font-semibold text-red-800">
-        <%= failure["kind"] %><% if failure["provider"].present? %>（<%= failure["provider"] %>）<% end %>
-      </p>
-      <% if failure["message"].present? %>
-        <p class="mt-2 whitespace-pre-wrap break-words text-sm text-red-900"><%= failure["message"] %></p>
-      <% end %>
-      <% if failure["hint"].present? %>
-        <p class="mt-2 text-sm text-gray-700">原因の候補: <%= failure["hint"] %></p>
-      <% end %>
+      <%= render "runs/failure_reason", failure: run.failure || {}, title_class: "text-red-800", message_class: "text-red-900" %>
     </section>
   <% end %>
 

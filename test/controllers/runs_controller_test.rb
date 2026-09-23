@@ -840,6 +840,175 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-token-count] dt", text: "最大出力トークン数", count: 0
   end
 
+  test "shows the research report, its sources, steps, thinking, usage, and agent, and the job ID under the status" do
+    run = create_research_run(result: research_result)
+
+    get run_path(run)
+
+    assert_select "[data-run-status]", text: "成功"
+    assert_select "[data-remote-job-id]", text: /プロバイダー側の処理の ID: v1_research/
+    assert_before "[data-run-status-row]", "[data-remote-job-id]"
+    assert_before "[data-remote-job-id]", "[data-run-result]"
+    assert_select "[data-research-report]" do
+      assert_select "h2" do |headings|
+        assert_equal %w[レポート 出典 プロバイダー側の手順], headings.map { |heading| heading.text.strip }
+      end
+      assert_select "[data-report]", text: /通信販売には法定のクーリング・オフがない。/
+      assert_select "[data-report]", text: /# 返品の法制度/
+      assert_select "[data-incomplete]", count: 0
+      assert_select "[data-citation]", 1
+      assert_select "[data-citation] a[href='https://www.caa.go.jp/policies/'][target='_blank'][rel='noopener']", text: "特定商取引法ガイド"
+      assert_select "[data-citation]", text: %r{https://www\.caa\.go\.jp/policies/}
+      assert_select "[data-citation]", text: /レポートの該当箇所: 法定のクーリング・オフがない/
+      assert_select "[data-citation]", text: /引用の断片: 通信販売にはクーリング・オフ制度はありません/
+      assert_select "[data-step]", 2
+      assert_select "[data-step] code", text: "google_search_call"
+      assert_select "[data-step]", text: /google_search/
+      assert_select "[data-step] pre", text: /通信販売 返品 特約/
+      assert_select "[data-step] code", text: "url_context_result"
+      assert_select "[data-step] pre", text: %r{https://www\.caa\.go\.jp/policies/}
+      assert_select "details[data-thinking]" do
+        assert_select "summary", text: "思考の要約"
+        assert_select "*", text: "まず法令を確かめる。"
+      end
+      assert_select "[data-tokens='input']", text: "12,000"
+      assert_select "[data-tokens='output']", text: "8,000"
+      assert_select "[data-tokens='thinking']", text: "3,000"
+      assert_select "[data-tokens='cache_read']", text: "500"
+      assert_select "[data-cost]", text: /不明/
+      assert_select "*", text: /deep-research-preview-04-2026/
+      assert_select "*", text: "v1_research", count: 0
+    end
+  end
+
+  test "marks a report cut short, and shows the rest of a report the provider reported little of" do
+    run = create_research_run(result: research_result(
+      "completed" => false, "provider_status" => "budget_exceeded", "finish_reason" => "max_tokens",
+      "citations" => [], "steps" => [], "thinking" => nil,
+      "tokens" => { "input" => 100, "output" => 50, "thinking" => nil, "cache_read" => nil }, "cost" => 0.42
+    ))
+
+    get run_path(run)
+
+    assert_select "[data-research-report]" do
+      assert_select "[data-incomplete]", text: /途中で打ち切られた（プロバイダーの状態: budget_exceeded）/
+      assert_before "[data-incomplete]", "[data-report]"
+      assert_select "*", text: "出典なし"
+      assert_select "*", text: "手順の報告なし"
+      assert_select "[data-citation]", 0
+      assert_select "[data-step]", 0
+      assert_select "[data-thinking]", 0
+      assert_select "[data-tokens='input']", text: "100"
+      assert_select "[data-tokens='thinking']", text: "—"
+      assert_select "[data-tokens='cache_read']", text: "—"
+      assert_select "[data-cost]", text: "$0.4200"
+    end
+  end
+
+  test "links a research source without a title by its URL" do
+    run = create_research_run(result: research_result("citations" => [
+      { "url" => "https://www.kokusen.go.jp/", "title" => nil, "text" => nil, "start_index" => nil, "end_index" => nil, "cited_text" => nil }
+    ]))
+
+    get run_path(run)
+
+    assert_select "[data-citation] a[href='https://www.kokusen.go.jp/'][target='_blank']", text: "https://www.kokusen.go.jp/"
+  end
+
+  test "shows a step's input, or its result when it has none, as text or JSON, and a step with neither by its type alone" do
+    run = create_research_run(result: research_result("steps" => [
+      { "type" => "thought_call", "name" => nil, "input" => "計画を立てる", "result" => "無視される" },
+      { "type" => "google_search_result", "name" => "google_search", "input" => nil, "result" => { "hits" => 3 } },
+      { "type" => "url_context_call", "name" => nil, "input" => nil, "result" => nil }
+    ]))
+
+    get run_path(run)
+
+    assert_select "[data-step]", 3
+    assert_select "[data-step]:nth-of-type(1) pre", text: "計画を立てる"
+    assert_select "[data-step]:nth-of-type(2) pre", text: '{"hits":3}'
+    assert_select "[data-step]:nth-of-type(3) code", text: "url_context_call"
+    assert_select "[data-step]:nth-of-type(3) pre", 0
+  end
+
+  test "shows a research source without a URL as text, and one without a URL or a title by its passages alone" do
+    run = create_research_run(result: research_result("citations" => [
+      { "url" => nil, "title" => "国民生活センター", "text" => "返品特約", "start_index" => 0, "end_index" => 4, "cited_text" => nil },
+      { "url" => "javascript:alert(1)", "title" => "危険な出典", "text" => nil, "start_index" => nil, "end_index" => nil, "cited_text" => nil },
+      { "url" => nil, "title" => nil, "text" => "表示の義務", "start_index" => 5, "end_index" => 10, "cited_text" => "返品特約は表示する" }
+    ]))
+
+    get run_path(run)
+
+    assert_select "[data-citation]", 3
+    assert_select "[data-citation] a", 0
+    assert_select "[data-citation]", text: /国民生活センター/
+    assert_select "[data-citation]", text: /危険な出典/
+    assert_select "[data-citation]", text: /javascript:alert\(1\)/
+    assert_select "[data-citation]", text: /レポートの該当箇所: 表示の義務/
+    assert_select "[data-citation]", text: /引用の断片: 返品特約は表示する/
+  end
+
+  test "shows the job ID of a running, failed, or cancelled research, and none for a run that kept none" do
+    running = create_research_run
+    failed = create_research_run.tap { |run| run.fail_with!(RubyLLM::ResearchJob::Error.new("Research failed: boom (job v1_research)", job: nil)) }
+    cancelled = create_research_run.tap { |run| run.cancel_with!(RubyLLM::ResearchJob::Error.new("Research cancelled:  (job v1_research)", job: nil)) }
+
+    [ running, failed, cancelled ].each do |run|
+      get run_path(run)
+
+      assert_select "[data-remote-job-id]", { text: /v1_research/ }, run.status
+    end
+
+    get run_path(create_run)
+    assert_select "[data-remote-job-id]", 0
+  end
+
+  test "says a run waiting on the provider will be tried again, why, and keeps polling" do
+    run = create_research_run
+    2.times { run.retry_later!(RubyLLM::UnauthorizedError.new("invalid_rapt")) }
+
+    get run_path(run)
+
+    assert_select "[data-run-status]", text: "実行中"
+    assert_select "[data-retry]" do
+      assert_select "*", text: /続きの取得に失敗し、1 分後にやり直す（2 回目、上限 60 回）/
+      assert_select "*", text: /認証の失敗（VertexAI）/
+      assert_select "*", text: /invalid_rapt/
+      assert_select "*", text: /gcloud auth application-default login/
+    end
+    assert_select "[data-failure]", 0
+    assert_select "[data-controller='poll'][data-poll-active-value='true']"
+  end
+
+  test "says nothing of trying again for a running run that never failed, or a run that ended" do
+    get run_path(create_research_run)
+    assert_select "[data-retry]", 0
+
+    %w[failed cancelled].each do |status|
+      ended = create_run(scenario_key: "research_topic", input: { "topic" => "返品の法制度" }, status: status, finished_at: 1.minute.ago,
+        remote_job_id: "v1_research", failure: { "kind" => "接続の失敗", "message" => "refused", "retries" => 3 })
+      get run_path(ended)
+      assert_select "[data-retry]", 0, status
+      assert_select "[data-failure]", { text: /接続の失敗/ }, status
+    end
+  end
+
+  test "shows why the provider cancelled a run, the way a failure is shown, and stops polling" do
+    run = create_research_run.tap { |r| r.cancel_with!(RubyLLM::ResearchJob::Error.new("Research cancelled: stopped (job v1_research)", job: nil)) }
+
+    get run_path(run)
+
+    assert_select "[data-run-status]", text: "取り消し"
+    assert_select "[data-failure]" do
+      assert_select "*", text: /取り消し（VertexAI）/
+      assert_select "*", text: /Research cancelled: stopped \(job v1_research\)/
+      assert_select "*", text: /原因の候補: .*取り消/
+    end
+    assert_select "[data-run-result]", 0
+    assert_select "[data-controller='poll'][data-poll-active-value='false']"
+  end
+
   test "shows the fallback answer, the model that gave it, the main model with its host, and the switch" do
     run = create_fallback_run([ fallback_record ])
 

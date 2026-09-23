@@ -397,12 +397,51 @@
   name: Deep Research
   official_name: Hosted Research
   summary: 数分以上の待ち時間を許容して、複数の情報源にあたった調査レポートを得たい
+  useful_cases: |-
+    複数の情報源にあたる調査を、検索、ページの取得、調査の計画、レポートの執筆まで含めてプロバイダーのエージェントに任せ、数分以上の待ち時間を許容してレポートを得たい場合に役立つ。
+
+    `RubyLLM.research_later` は調査を投入するだけで、`id` を持つジョブをすぐに返す。ID を自分の記録に保存しておけば、別のプロセスから `RubyLLM::ResearchJob.find(id, provider: :vertexai)` で読み込み、`refresh` か `wait` で完了を待てる。RubyLLM は調査の記録のテーブルを用意しないので、ID の保存はアプリの役目になる。
+
+    レポートはチャットの応答と同じ `RubyLLM::Message` で、`content`、`citations`、`thinking`、`server_tool_calls` を持つ。ただし、途中の手順、思考の要約、出典の URL は省かれることがある。`job.tokens` でトークン数が分かる（出力は思考を含む）。プロバイダーが金額を返さず、エージェントには単価がないため、コスト（`job.cost.total`）は不明になる。`report.model` は `nil` で、エージェントはモデルではない。出力の予算などで途中で打ち切られたレポートは、`job.incomplete?` と `finish_reason` の `:max_tokens` で分かる。失敗と取り消しは `message` を読むと例外になり、状態と理由はジョブに残る。
+
+    ブロッキングの `RubyLLM.research` は、待ちの途中の例外や中断で取り消しを試みる。このアプリは投入と待ちを分け、取り消しを試みない。
+
+    組み込みで対応するプロバイダーは 2.0.0 では Vertex AI だけである（OpenAI と Azure は、Responses のバックグラウンドモードで長い調査は走るが、取得、ポーリング、取り消しの仕組みがない）。Vertex AI の Deep Research エージェント（`deep-research-preview-04-2026`）は Preview で、ロケーションは `global` に限られる。ツールを指定しなければ Google 検索と URL コンテキスト（ページの取得）を使う。完了まで数分かかり、実行時間の上限は 120 分である。課金はトークンとツールの実行（検索とグラウンディング）の合算で、プロンプトと生成物はプロバイダー側に 7 日間保存される。
+
+    このアプリは、投入の直後にジョブ ID を実行に控え、同じジョブの中で状態を取得して完了を待つ（間隔と上限はコード断片の定数にある）。アプリの停止でジョブが待ち行列に戻されても、次のジョブは控えた ID から続きを待ち、調査をもう一度投入しない。状態の取得が続けられる種類の失敗（ネットワーク、障害、レート制限、認証情報の失効など）になったときは、実行中のまま 1 分後にやり直す。コンソールから `RubyLLM::ResearchJob.find(id, provider: :vertexai).cancel` で取り消すと、実行は「取り消し」になる。
+
+    Sentry のトレースには、投入（プロンプト、エージェント、ジョブ ID を持つ `research_job` のスパン）と状態の取得のリクエストだけが載る。投入と待ちはチャットのイベントを発行しないため、レポートの本文、トークン数、コストはトレースに載らず、実行の画面で読む。
+  without_it: |-
+    検索のツール、ページの取得のツール、調査の計画と繰り返しのループ、出典の追跡、長時間の実行の中断と再開を、自分で書いて保守することになる。
+
+    Vertex AI の Interactions API を直接呼ぶ場合は、投入、状態の取得、応答の手順（`steps`）からのレポート、出典、思考、使用量の読み取りと、エラーの変換を自分で書く。RubyLLM では、レポートがチャットと同じ `Message` と `Citation` になり、ジョブ ID からの復元と取り消しが用意されている。
   sources:
     - title: Hosted Research（RubyLLM）
       url: https://rubyllm.com/hosted-research/
+    - title: What's New in 2.0（RubyLLM）— Hosted Research
+      url: https://rubyllm.com/whats-new-in-2-0/#hosted-research
+    - title: Use the Gemini Deep Research Agent（Google Cloud）
+      url: https://docs.cloud.google.com/gemini-enterprise-agent-platform/agents/use-deep-research
+    - title: Provider API Coverage（RubyLLM）— Asynchronous research
+      url: https://rubyllm.com/provider-coverage/
   scenarios:
     - key: research_topic
       name: 調査テーマのレポートを作る
+      handler: DeepResearch::ResearchTopic
+      providers: [vertexai]
+      # No models: the agent is not a model of RubyLLM's registry, and the
+      # handler keeps its ID.
+      inputs:
+        - name: topic
+          label: 調査テーマ
+          required: true
+          default: |-
+            家電と日用品を扱う EC サイトのサポートデスクで、返品と交換の案内文を見直しています。
+            日本の通信販売における返品・キャンセルに関する法制度（特定商取引法の返品特約の表示、クーリング・オフの適用の有無など）と、消費者庁や国民生活センターなどの公的機関の指針を整理してください。
+            案内文に反映すべき点を挙げ、各点に出典を付けてください。
+      result_kind: research_report
+      # Starting over would submit another research and pay for it again.
+      retryable: false
 
 - key: tokenization
   name: Tokenization and Token Counting

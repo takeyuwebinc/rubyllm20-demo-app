@@ -11,7 +11,7 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
       assert_select "*", text: /推論、ツール、プロバイダー側のツール/
       assert_select "[data-availability]", text: "実行できる"
     end
-    assert_select "[data-demo='deep-research'] [data-availability]", text: "準備中"
+    assert_select "[data-demo='batches'] [data-availability]", text: "準備中"
   end
 
   test "names the missing provider in the list" do
@@ -313,6 +313,42 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
     assert_select "#count_tokens input[type=submit][value='実行する'][disabled]"
   end
 
+  test "shows the research as runnable with its explanation, sources, code, and default topic" do
+    with_vertexai_config("demo-project") { get root_path }
+
+    assert_select "[data-demo='deep-research'] [data-availability]", text: "実行できる"
+
+    with_vertexai_config("demo-project") { get demo_path("deep-research") }
+
+    assert_select "h2", text: "役立つケース"
+    assert_select "*", text: /RubyLLM::ResearchJob\.find/
+    assert_select "*", text: /120 分/
+    assert_select "*", text: /レポートの本文、トークン数、コストはトレースに載らず/
+    assert_select "h2", text: "使わない場合に困ること"
+    assert_select "*", text: /Interactions API/
+    assert_select "a[href='https://rubyllm.com/hosted-research/'][target='_blank']"
+    assert_select "a[href='https://rubyllm.com/whats-new-in-2-0/#hosted-research'][target='_blank']"
+    assert_select "a[href='https://docs.cloud.google.com/gemini-enterprise-agent-platform/agents/use-deep-research'][target='_blank']"
+    assert_select "a[href='https://rubyllm.com/provider-coverage/'][target='_blank']"
+    assert_select "#research_topic" do
+      assert_select "pre code", text: /research_later/
+      assert_select "pre code", text: /ResearchJob\.find/
+      assert_select "textarea[name='run[input][topic]']", text: /特定商取引法/
+      assert_select "input[type=submit][value='実行する']:not([disabled])"
+    end
+  end
+
+  test "keeps the research from running without Vertex AI settings" do
+    with_vertexai_config(nil) { get root_path }
+
+    assert_select "[data-demo='deep-research'] [data-availability]", text: "設定値が足りない（VertexAI）"
+
+    with_vertexai_config(nil) { get demo_path("deep-research") }
+
+    assert_select "#research_topic [data-availability]", text: "設定値が足りない（VertexAI）"
+    assert_select "#research_topic input[type=submit][value='実行する'][disabled]"
+  end
+
   test "shows answering from the return policy as runnable with its explanation, sources, code, default inquiry, and the policy" do
     with_anthropic_key("sk-ant-test") { get root_path }
 
@@ -412,11 +448,11 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
   # TODO(once every demo has its explanation): remove this test, which then
   # has no demo left to show it on.
   test "says the explanation comes with the scenario when a demo has none yet" do
-    get demo_path("deep-research")
+    get demo_path("batches")
 
     assert_select "h2", text: "役立つケース", count: 0
-    assert_select "*", text: /数分以上の待ち時間を許容して/
-    assert_select "a[href='https://rubyllm.com/hosted-research/']"
+    assert_select "*", text: /すぐに応答を返す必要がない/
+    assert_select "a[href='https://rubyllm.com/batches/']"
   end
 
   test "links each document of a scenario before its inputs, in a new tab, in the order of the definition" do

@@ -1,11 +1,16 @@
 module Demos
   # Runs one scenario against its provider and records how it ended.
   #
-  # The job itself never retries: every retry would call the provider and pay
-  # again. RubyLLM already retries timeouts, rate limits, and server errors
-  # inside one run.
+  # The job itself never retries a call that starts work: every retry would
+  # call the provider and pay again. RubyLLM already retries timeouts, rate
+  # limits, and server errors inside one run. Waiting on work kept at the
+  # provider is different: it only fetches the work's state, which costs
+  # nothing, so a failure that may pass is tried again later.
   class RunJob < ApplicationJob
     queue_as :default
+
+    # How long a run waiting on the provider rests before it is tried again.
+    RETRY_INTERVAL = 1.minute
 
     class << self
       # The run a job serialized by Active Job was for, or nil for another job.
@@ -15,6 +20,11 @@ module Demos
         ActiveJob::Arguments.deserialize(serialized_job["arguments"]).first
       rescue ActiveJob::DeserializationError
         nil
+      end
+
+      # Queues the job that tries the run again after RETRY_INTERVAL.
+      def retry_later(run)
+        set(wait: RETRY_INTERVAL).perform_later(run)
       end
 
       # Hands the runs of the given Solid Queue jobs, which a dead worker had
@@ -58,12 +68,7 @@ module Demos
       end
       record(run, outcome)
     rescue StandardError => error
-      run.fail_with!(error)
-      # A provider failure is shown on the run page with its likely causes.
-      # Only an error that points to a bug in this app is reported.
-      unless FailureKinds.provider_call?(error)
-        Rails.error.report(error, context: { run_id: run.id, scenario_key: run.scenario_key, conversation_id: run.conversation_id })
-      end
+      record_failure(run, error)
     end
 
     private
@@ -73,7 +78,8 @@ module Demos
     # that finished while the app was down could not be collected. Checking
     # from a job scheduled every so often would open a workflow, and a trace,
     # for every check, where waiting here keeps a run in one trace unless it
-    # is interrupted.
+    # is interrupted. The wait holds one of the worker's threads for as long
+    # as the work takes.
     def run_scenario(run, scenario, chat)
       return scenario.resume(chat) if chat
       return scenario.resume_remote_job(run.remote_job_id) if run.remote_job_id
@@ -114,6 +120,29 @@ module Demos
         run.await_approval!(outcome)
       else
         run.succeed!(outcome)
+      end
+    end
+
+    # Cancellation, expiry, and trying again are what the provider answered,
+    # not bugs of this app, so none of them is reported. Only a run waiting
+    # on work kept at the provider expires or is tried again: a chat is
+    # continued by calling the model, which would pay again.
+    def record_failure(run, error)
+      waiting_on_provider = run.remote_job_id.present? && run.chat_id.nil?
+
+      if FailureKinds.cancelled?(error)
+        run.cancel_with!(error)
+      elsif waiting_on_provider && FailureKinds.not_found?(error)
+        run.fail_with!(error, kind: FailureKinds::EXPIRED)
+      elsif waiting_on_provider && FailureKinds.retry_later?(error) && run.retry_later!(error)
+        self.class.retry_later(run)
+      else
+        run.fail_with!(error)
+        # A provider failure is shown on the run page with its likely causes.
+        # Only an error that points to a bug in this app is reported.
+        unless FailureKinds.provider_call?(error)
+          Rails.error.report(error, context: { run_id: run.id, scenario_key: run.scenario_key, conversation_id: run.conversation_id })
+        end
       end
     end
   end

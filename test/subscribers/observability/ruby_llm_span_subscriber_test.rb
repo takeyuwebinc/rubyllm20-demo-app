@@ -493,6 +493,67 @@ module Observability
       assert_equal "mp3", speech.attributes["ruby_llm.speech.format"], "the format asked for"
     end
 
+    test "traces a research job submission as a plain span, with the agent, the job, and the prompt as the input" do
+      instrument("research_job.ruby_llm", research_payload) { |payload| submit_research(payload) }
+
+      attributes = span("research_job").attributes
+
+      assert_equal "research_job", attributes["ruby_llm.operation"]
+      assert_equal "vertexai", attributes["gen_ai.provider.name"]
+      assert_equal "deep-research-preview-04-2026", attributes["ruby_llm.research.agent"]
+      assert_equal "v1_abc", attributes["ruby_llm.research.job_id"]
+      assert_equal "pending", attributes["ruby_llm.research.status"]
+      assert_equal [ { "role" => "user", "parts" => [ { "type" => "text", "content" => "日本の通信販売の返品の法制度を整理してほしい。" } ] } ],
+        JSON.parse(attributes["gen_ai.input.messages"])
+      # An operation without a GenAI name of its own carries neither the
+      # Sentry operation nor usage, as the submission reports no tokens.
+      assert_not_includes attributes.keys, "sentry.op"
+      assert_not_includes attributes.keys, "gen_ai.operation.name"
+      assert_not_includes attributes.keys, "gen_ai.request.model"
+      assert_empty attributes.keys.grep(/\Agen_ai\.(usage|cost)\./)
+      assert_not_includes attributes.keys, "gen_ai.output.messages"
+    end
+
+    test "marks a failed research job submission as failed, without a job or its status" do
+      assert_raises(RubyLLM::RateLimitError) do
+        instrument("research_job.ruby_llm", research_payload) { raise RubyLLM::RateLimitError.new("Quota exceeded for quota metric") }
+      end
+
+      research = span("research_job")
+
+      assert_equal OpenTelemetry::Trace::Status::ERROR, research.status.code
+      assert_equal "RubyLLM::RateLimitError", research.attributes["error.type"]
+      assert_match(/Quota exceeded/, research.attributes["error.message"])
+      assert_equal "deep-research-preview-04-2026", research.attributes["ruby_llm.research.agent"]
+      assert_not_includes research.attributes.keys, "ruby_llm.research.job_id"
+      assert_not_includes research.attributes.keys, "ruby_llm.research.status"
+    end
+
+    test "leaves the input out when the research prompt is empty, and still describes the job" do
+      instrument("research_job.ruby_llm", research_payload.merge(prompt: "")) { |payload| submit_research(payload) }
+
+      attributes = span("research_job").attributes
+
+      assert_not_includes attributes.keys, "gen_ai.input.messages"
+      assert_equal "deep-research-preview-04-2026", attributes["ruby_llm.research.agent"]
+      assert_equal "v1_abc", attributes["ruby_llm.research.job_id"]
+      assert_equal "pending", attributes["ruby_llm.research.status"]
+    end
+
+    test "leaves the research prompt out when content capture is off, and still describes the job" do
+      ActiveSupport::Notifications.unsubscribe(@subscription)
+      @subscription = ActiveSupport::Notifications.subscribe(/\.ruby_llm\z/, RubyLLMSpanSubscriber.new(tracer: @provider.tracer("test"), capture_content: false))
+
+      instrument("research_job.ruby_llm", research_payload) { |payload| submit_research(payload) }
+
+      attributes = span("research_job").attributes
+
+      assert_empty attributes.keys.grep(/messages/)
+      assert_equal "deep-research-preview-04-2026", attributes["ruby_llm.research.agent"]
+      assert_equal "v1_abc", attributes["ruby_llm.research.job_id"]
+      assert_equal "pending", attributes["ruby_llm.research.status"]
+    end
+
     test "describes a submitted video job by its id and options, with the prompt as the input" do
       instrument("video_job.ruby_llm", video_job_payload) { |payload| payload[:job_id] = "0eb6910f-a353-4699-9d1e-6a4f7a5b39e2" }
 
@@ -622,6 +683,16 @@ module Observability
 
     def complete_speech(payload)
       payload.merge!(response_model: "gpt-4o-mini-tts", voice: "marin", format: "mp3", audio_bytes: 48_000)
+    end
+
+    # What RubyLLM.research_later instruments before the provider answers.
+    def research_payload
+      { provider: :vertexai, agent: "deep-research-preview-04-2026", prompt: "日本の通信販売の返品の法制度を整理してほしい。", metadata: nil }
+    end
+
+    # What it adds once the provider accepted the job.
+    def submit_research(payload)
+      payload.merge!(job_id: "v1_abc", status: :pending)
     end
 
     def complete(payload, tokens: RubyLLM::Tokens.new(input: 13, output: 75), cost: 0.00003, response: nil)

@@ -5,6 +5,12 @@ module Demos
 
     FINISHED = %w[succeeded failed cancelled].freeze
 
+    # How often a run waiting on work kept at the provider is tried again,
+    # counting both failures to fetch it and workers that died waiting. It
+    # stops a job that kills its own worker, or a provider that keeps
+    # failing, from repeating forever.
+    MAX_RETRIES = 60
+
     # A finished run never changes state, so its result cannot be rewritten
     # after the fact.
     TRANSITIONS = {
@@ -71,12 +77,13 @@ module Demos
       # again rather than failed: the work goes on at the provider, and the
       # job waits for it from the id, which only reads its state and costs
       # nothing. So a result that finished while the app was down still
-      # reaches the history. Waiting cannot kill a worker, so there is no
-      # limit on how often this repeats. Any other run fails.
+      # reaches the history. The job is queued after RETRY_INTERVAL and
+      # counted as a retry, so that a job that kills its own worker stops
+      # after MAX_RETRIES rather than repeating forever. Any other run fails.
       def fail_abandoned!(run_ids, message: nil)
         running.where(id: run_ids).find_each do |run|
-          if run.remote_job_id
-            RunJob.perform_later(run)
+          if run.remote_job_id && run.retry_later_as!(FailureKinds::WORKER_LOST, message:)
+            RunJob.retry_later(run)
           else
             run.fail_as!(FailureKinds::WORKER_LOST, message:)
           end
@@ -148,7 +155,8 @@ module Demos
           [ key, { "filename" => blob.filename.to_s, "content_type" => blob.content_type, "byte_size" => blob.byte_size } ]
         end
 
-        assign_attributes(status: :succeeded, result: kept, finished_at: Time.current)
+        # The failures the run was tried again after no longer describe it.
+        assign_attributes(status: :succeeded, result: kept, failure: nil, finished_at: Time.current)
         generated_files.attach(blobs) if blobs.any?
         save!
       end
@@ -160,15 +168,10 @@ module Demos
       raise
     end
 
-    def fail_with!(error)
-      kind = FailureKinds.for(error)
-      fail!(
-        "provider" => scenario&.providers&.map { |slug| Demos.provider_name(slug) }&.join("、"),
-        "kind" => kind&.name || error.class.name,
-        "error_class" => error.class.name,
-        "message" => error.message,
-        "hint" => kind&.hint
-      )
+    # Fails the run with +error+. The kind is the table's for the error,
+    # unless the caller knows better what the error means for the run.
+    def fail_with!(error, kind: FailureKinds.for(error))
+      fail!(failure_from(error, kind))
     end
 
     def fail!(failure)
@@ -177,7 +180,31 @@ module Demos
 
     # Fails the run for a reason other than a provider call.
     def fail_as!(kind, message: nil)
-      fail!("kind" => kind.name, "message" => message, "hint" => kind.hint)
+      fail!(failure_as(kind, message))
+    end
+
+    # Ends the run because the provider cancelled the work. The reason is
+    # kept where a failure's is, so the history shows it the same way.
+    def cancel_with!(error)
+      refuse_transition!("cancelled")
+      update!(status: :cancelled, failure: failure_from(error, FailureKinds::CANCELLED), finished_at: Time.current)
+    end
+
+    # Keeps the run running, with the failure it will be tried again after
+    # and how often that has happened. Returns false, keeping nothing, once
+    # the run has been tried again MAX_RETRIES times; the caller then fails
+    # it.
+    def retry_later!(error)
+      keep_retry!(failure_from(error, FailureKinds.for(error)))
+    end
+
+    # As retry_later!, for a reason other than a provider call.
+    def retry_later_as!(kind, message: nil)
+      keep_retry!(failure_as(kind, message))
+    end
+
+    def retries
+      failure&.fetch("retries", nil).to_i
     end
 
     # Stops the run until a person decides on the chat's pending tool calls.
@@ -219,6 +246,10 @@ module Demos
     # work instead of leaving it, and paying for it, once more. The status
     # stays running: that the provider is still at work shows in the id
     # being kept. Only a running run without an id takes one.
+    #
+    # The id alone is enough, as the scenario names the provider. The column
+    # is remote_job_id rather than provider_job_id, which is already the name
+    # of Active Job's own id for the queued job.
     def record_remote_job_id!(id)
       raise ArgumentError, "The id of the work left with the provider is blank" if id.blank?
       # The status does not change, so the transition validation does not
@@ -242,6 +273,33 @@ module Demos
     # character, as a guard for ids that come from elsewhere.
     def issue_conversation_id
       self.conversation_id ||= "run-#{SecureRandom.hex(8)}"
+    end
+
+    def failure_from(error, kind)
+      {
+        "provider" => scenario&.providers&.map { |slug| Demos.provider_name(slug) }&.join("、"),
+        "kind" => kind&.name || error.class.name,
+        "error_class" => error.class.name,
+        "message" => error.message,
+        "hint" => kind&.hint
+      }
+    end
+
+    def failure_as(kind, message)
+      { "kind" => kind.name, "message" => message, "hint" => kind.hint }
+    end
+
+    def keep_retry!(failure)
+      refuse_unless_running!
+      count = retries
+      return false if count >= MAX_RETRIES
+
+      update!(failure: failure.merge("retries" => count + 1))
+      true
+    end
+
+    def refuse_unless_running!
+      raise ArgumentError, "Run #{id} is #{status}, not running" unless running?
     end
 
     def status_transition
