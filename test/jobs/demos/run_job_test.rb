@@ -423,12 +423,12 @@ module Demos
     test "fails, reports, and stops checking on a collection that fails for an error of this app" do
       keep_work
       FakeHandler.check_outcome = openai_batch(raw_status: "completed")
-      FakeHandler.resume_outcome = -> { raise JSON::ParserError, "unexpected token" }
+      FakeHandler.resume_outcome = -> { raise NoMethodError, "undefined method 'content' for nil" }
 
-      assert_error_reported(JSON::ParserError) { perform(retryable: false) }
+      assert_error_reported(NoMethodError) { perform(retryable: false) }
 
       assert_predicate @run.reload, :failed?
-      assert_equal "JSON::ParserError", @run.failure["kind"]
+      assert_equal "NoMethodError", @run.failure["kind"]
       assert_nil @run.result
       assert_no_enqueued_jobs
     end
@@ -461,6 +461,21 @@ module Demos
       assert_predicate @run.reload, :failed?
       assert_equal "接続の失敗", @run.failure["kind"]
       assert_equal "refused", @run.failure["message"]
+      assert_no_enqueued_jobs
+    end
+
+    test "gives up on a collection that fails at the provider more than 48 hours after the submission" do
+      travel_to(Time.zone.local(2026, 9, 21, 10, 0, 0)) { keep_work }
+      FakeHandler.check_outcome = openai_batch(raw_status: "completed")
+      FakeHandler.resume_outcome = -> { raise RubyLLM::ServerError, "The server had an error" }
+
+      travel_to(Time.zone.local(2026, 9, 23, 10, 0, 1)) do
+        assert_no_error_reported { perform(retryable: false) }
+      end
+
+      assert_predicate @run.reload, :failed?
+      assert_equal "サーバー側のエラー", @run.failure["kind"]
+      assert_nil @run.result
       assert_no_enqueued_jobs
     end
 
