@@ -133,6 +133,7 @@ RubyLLM::RateLimitError: Quota exceeded for quota metric
 2. 作成直後の画面に表示される DSN を控える。後から確認する場合は、プロジェクトの設定の Client Keys (DSN) にある。
 3. `.env` の `SENTRY_DSN=` に貼り付ける。
 4. 組織の識別子（Organization Slug）を `.env` の `SENTRY_ORG=` に書く。Sentry の画面の URL `https://<組織の識別子>.sentry.io/` の先頭の部分である。DSN には含まれないため、別に設定する。未設定でも計装は動くが、実行の画面に Sentry へのリンクが出ない。
+5. プロジェクトのデータスクラビングの Safe Fields（API ではプロジェクトの `safeFields`）に、`'ruby_llm.tokenization.count'` を引用符ごと加える。加えないと、テキストの分割（Tokenization and Token Counting）のトークン数が Sentry に載らない。引用符がないと、名前のドットがパスの区切りと解釈されて効かない。変更が取り込みに反映されるまで数分かかる。
 
 注意点:
 
@@ -146,6 +147,7 @@ RubyLLM::RateLimitError: Quota exceeded for quota metric
 - DSN は送信先を示す値で、API キーほどの権限は持たないが、`.env` に置いてコミットしない。
 - **プロンプトと応答の本文が Sentry に送られる。代表シナリオの入力に、実データや個人情報を入力しない。**
 - Sentry が独自に推定するコストは、未知のモデル、バッチ料金、トークン課金以外の料金を対象としない。このアプリは RubyLLM が算出したコストを Sentry に送る。
+- Sentry の既定のデータスクラビング（プロジェクトの `dataScrubberDefaults`）は、名前に `token`、`auth`、`secret` などを含む属性を、文字列なら `[Filtered]` に置き換え、数値なら属性ごと消す。`gen_ai.usage.input_tokens` のように Sentry が知っている属性は消さない。使用量の試行スパンの `ruby_llm.attempt.input_tokens` と `ruby_llm.attempt.output_tokens` は Safe Fields に加えていないため、Sentry に載らない。
 
 ## 疎通確認
 
@@ -196,6 +198,7 @@ Vertex AI  SKIP  GOOGLE_CLOUD_PROJECT が未設定
 - RubyLLM の計装イベントから作った OpenTelemetry のスパンを、Sentry が OTLP で受理すること。トレース画面で `gen_ai.invoke_agent`、`gen_ai.chat`、`http.client` の各スパンが親子関係つきで表示され、Agent Activity のタブと、エージェント用のスパン詳細（Agent Name、Input、Output）が出ること（2026-09-19 に実送信し、利用者が Sentry の画面で確認）
 - アプリの計装で送った会話が、Sentry の Agents の Conversations に表示されること。2 ターンの会話が、会話 ID で 1 つにまとまり、LLM の呼び出し回数、トークン数、コスト、ツールの呼び出し（名前と引数）、発話と応答の本文が出ること（2026-09-19 に実アプリ経由で送信し、利用者が Sentry の画面で確認）
 - アプリの画面から実行した代表シナリオのトレースが、Puma から fork したジョブのワーカーからも Sentry に届くこと。`http.client` のスパンが `POST responses` になり、OpenAI のモデルが Responses API で送られていること。実行の画面が組み立てた URL で、トレースと会話の画面が開けること（2026-09-22 に F1 を実行し、利用者が Sentry の画面で確認）
+- Sentry の既定のデータスクラビングが、名前に `token`、`auth`、`secret` を含む属性を消し、`session` を含む属性は消さないこと。引用符で囲んだ名前を Safe Fields に加えると消されなくなり、引用符のない名前では効かないこと。反映には約 4 分かかったこと（2026-09-23 に試験用のスパンを送って確認）
 - `bin/check_keys` の SKIP 経路、無効なキーでの NG 経路、有効な認証情報での OK 経路（4 プロバイダーとも、2026-09-19 に実リクエストで確認）。上の出力例のトークン数は例示
 - 失効した ADC では Vertex AI が `UnauthorizedError` になり、`gcloud auth application-default login` で解消すること（実リクエスト）
 - Deep Research のリクエストを受けるサービスが `aiplatform.googleapis.com` であること（クォータ超過のエラーメッセージに記載）
