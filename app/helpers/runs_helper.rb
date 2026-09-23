@@ -34,6 +34,16 @@ module RunsHelper
     end
   end
 
+  # A link, in a new tab, to a URL the model returned, such as a source it
+  # cited. The model writes these URLs from pages it read, so only an http or
+  # https URL becomes a link: a javascript: URL would run in this page when
+  # clicked. Any other URL leaves the text as plain text.
+  def model_url_link(text, url)
+    return ERB::Util.html_escape(text) unless url.to_s.match?(%r{\Ahttps?://}i)
+
+    link_to text, url, target: "_blank", rel: "noopener", class: "link-quiet"
+  end
+
   def run_status_badge(run, size: :small)
     text_size = size == :large ? "px-3 py-1 text-base" : "px-2 py-1 text-xs"
     tag.span(STATUS_LABELS.fetch(run.status), data: { run_status: run.status },

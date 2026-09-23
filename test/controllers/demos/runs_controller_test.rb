@@ -82,6 +82,30 @@ module Demos
       assert_select "#approve_refund [data-input-error='order']", text: "入力してください"
     end
 
+    test "records a web search run with its question and queues it" do
+      assert_difference(-> { Run.count }) do
+        with_openai_key("sk-test") do
+          post demo_runs_path("provider-tools"), params: { run: { scenario_key: "search_web", input: { question: "返品の制度は変わりましたか" } } }
+        end
+      end
+
+      run = Run.last
+      assert_redirected_to run_path(run)
+      assert_equal({ "question" => "返品の制度は変わりましたか" }, run.input)
+      assert_enqueued_with(job: RunJob, args: [ run ])
+    end
+
+    test "refuses a blank question for the web search" do
+      assert_no_difference(-> { Run.count }) do
+        with_openai_key("sk-test") do
+          post demo_runs_path("provider-tools"), params: { run: { scenario_key: "search_web", input: { question: " \n" } } }
+        end
+      end
+
+      assert_response :unprocessable_entity
+      assert_select "#search_web [data-input-error='question']", text: "入力してください"
+    end
+
     test "records a speech run with the answer to read aloud, and queues it" do
       assert_difference(-> { Run.count }) do
         with_openai_key("sk-test") do

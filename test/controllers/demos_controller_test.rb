@@ -115,6 +115,36 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
     assert_select "#approve_refund input[type=submit][value='実行する'][disabled]"
   end
 
+  test "shows the web search as runnable with its explanation, sources, code, and default question, and keeps code execution in preparation" do
+    with_openai_key("sk-test") { get root_path }
+
+    assert_select "[data-demo='provider-tools'] [data-availability]", text: "実行できる"
+
+    with_openai_key("sk-test") { get demo_path("provider-tools") }
+
+    assert_select "h2", text: "役立つケース"
+    assert_select "*", text: /プロバイダーの側で検索とページの閲覧を行い/
+    assert_select "*", text: /検索の回数の課金を含まない/
+    assert_select "h2", text: "使わない場合に困ること"
+    assert_select "*", text: /検索エンジンの API を選んで契約し/
+    assert_select "a[href='https://rubyllm.com/provider-tools/'][target='_blank']"
+    assert_select "a[href='https://rubyllm.com/whats-new-in-2-0/#provider-tools'][target='_blank']"
+    assert_select "a[href='https://developers.openai.com/api/docs/guides/tools-web-search'][target='_blank']"
+    assert_select "a[href='https://developers.openai.com/api/docs/pricing#built-in-tools'][target='_blank']"
+    assert_select "#search_web" do
+      assert_select "pre code", text: /with_provider_tools\(:web_search\)/
+      assert_select "pre code", text: /server_tool_calls/
+      assert_select "pre code", text: /citations/
+      assert_select "textarea[name='run[input][question]']", text: /返品/
+      assert_select "input[type=submit][value='実行する']:not([disabled])"
+    end
+    assert_select "#run_code" do
+      assert_select "*", text: /準備中/
+      assert_select "textarea", count: 0
+      assert_select "input[type=submit]", count: 0
+    end
+  end
+
   test "shows reading the answer aloud as runnable with its explanation, sources, code, and default answer" do
     with_openai_key("sk-test") { get root_path }
 
@@ -144,6 +174,17 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
       assert_select "*", text: /準備中/
       assert_select "input[type=submit]", count: 0
     end
+  end
+
+  test "keeps the web search from running without OpenAI settings" do
+    with_openai_key(nil) { get root_path }
+
+    assert_select "[data-demo='provider-tools'] [data-availability]", text: "設定値が足りない（OpenAI）"
+
+    with_openai_key(nil) { get demo_path("provider-tools") }
+
+    assert_select "#search_web [data-availability]", text: "設定値が足りない（OpenAI）"
+    assert_select "#search_web input[type=submit][value='実行する'][disabled]"
   end
 
   test "keeps reading the answer aloud from running without OpenAI settings" do

@@ -1,0 +1,60 @@
+<%# The searches and the sources are what the provider reported. Their URLs come from the model, so they become links only through model_url_link. %>
+<% result = run.result %>
+<% searches = result["searches"] %>
+<% citations = result["citations"] %>
+<div data-web-search-answer class="max-w-prose space-y-6">
+  <section>
+    <h2 class="text-base font-semibold text-gray-700">回答</h2>
+    <div class="mt-2 whitespace-pre-wrap break-words leading-relaxed text-gray-900"><%= result["answer"] %></div>
+  </section>
+
+  <section>
+    <h2 class="text-base font-semibold text-gray-700">行われた検索</h2>
+    <% if searches.any? %>
+      <ol class="mt-2 space-y-2 text-sm">
+        <% searches.each do |search| %>
+          <li data-search class="flex gap-3">
+            <code class="shrink-0 self-start rounded bg-gray-100 px-1 py-0.5 text-gray-700"><%= search["action"] || search["type"] %></code>
+            <div class="min-w-0 space-y-0.5 break-words text-gray-900">
+              <% search["queries"].each do |query| %>
+                <p><%= query %></p>
+              <% end %>
+              <% if search["url"] %>
+                <p class="break-all"><%= model_url_link(search["url"], search["url"]) %></p>
+              <% end %>
+            </div>
+          </li>
+        <% end %>
+      </ol>
+    <% else %>
+      <p class="mt-2 text-sm text-gray-500">検索なし</p>
+    <% end %>
+  </section>
+
+  <section>
+    <h2 class="text-base font-semibold text-gray-700">出典</h2>
+    <% if citations.any? %>
+      <ol class="mt-2 space-y-3 text-sm">
+        <% citations.each do |citation| %>
+          <li data-citation class="break-words text-gray-900">
+            <% if citation["title"].present? %>
+              <p><%= model_url_link(citation["title"], citation["url"]) %></p>
+              <% if citation["url"] %>
+                <p class="break-all text-xs text-gray-500"><%= citation["url"] %></p>
+              <% end %>
+            <% elsif citation["url"] %>
+              <p class="break-all"><%= model_url_link(citation["url"], citation["url"]) %></p>
+            <% end %>
+            <% if citation["text"].present? %>
+              <p class="mt-1 text-gray-700">回答の該当箇所: <%= citation["text"] %></p>
+            <% end %>
+          </li>
+        <% end %>
+      </ol>
+    <% else %>
+      <p class="mt-2 text-sm text-gray-500">出典なし</p>
+    <% end %>
+  </section>
+
+  <p class="text-sm text-gray-500">応答したモデル: <%= result["model"] %></p>
+</div>

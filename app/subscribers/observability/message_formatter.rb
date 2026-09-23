@@ -16,7 +16,7 @@ module Observability
 
       # Thinking goes in its own part type. Backends show it apart from what
       # the model said; as a text part it would read as the model's answer.
-      [ reasoning_part(message), text_part(message), *tool_call_parts(message) ].compact
+      [ reasoning_part(message), text_part(message), *tool_call_parts(message), *server_tool_call_parts(message) ].compact
     end
 
     def reasoning_part(message)
@@ -33,6 +33,21 @@ module Observability
 
       message.tool_calls.each_value.map do |tool_call|
         { type: "tool_call", id: tool_call.id, name: tool_call.name, arguments: tool_call.arguments }
+      end
+    end
+
+    # Steps the provider ran itself, such as a web search. The message shape
+    # has no part type for them, and a tool call is the nearest: it carries
+    # what the model asked for, with which input. The call has a name only when
+    # the provider reports one; OpenAI's items have only their type.
+    #
+    # Citations are not parts. The message shape has no type for them, and the
+    # span of the answer they point to is already in the text part.
+    def server_tool_call_parts(message)
+      return [] unless message.respond_to?(:server_tool_calls)
+
+      Array(message.server_tool_calls).map do |call|
+        { type: "tool_call", id: call.id, name: call.name || call.type, arguments: call.input || {} }
       end
     end
 
