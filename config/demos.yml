@@ -118,12 +118,46 @@
 - key: model-fallbacks
   name: Model Fallbacks
   summary: プロバイダーの障害やレート制限が起きても、応答を続けたい
+  useful_cases: |-
+    プロバイダーの障害やレート制限が起きても、応答を続けたい場合に役立つ。`with_fallbacks` に予備モデルを順に渡すと、生成がレート制限、サーバー側のエラー、サービス停止、過負荷、タイムアウト、接続の失敗で失敗したときに、次のモデルで同じ会話を送り直す。予備モデルは別のプロバイダーのモデルでもよい。会話の履歴、指示文、ツール、スキーマは予備モデルに引き継がれるので、予備モデルがそれらに対応している必要がある。
+
+    認証の失敗、不正なリクエスト、入力の上限超過、モデル名の誤りでは切り替わらない。切り替えの対象にする例外は `on:` で選べる。切り替えの前には、同じモデルへのリトライ（`max_retries`、既定 3 回）が先に尽きる。レート制限でプロバイダーが示す待ち時間（Retry-After）が `retry_max_interval` を超えると、待たずに失敗し、すぐ切り替わる。切り替えはその 1 回の生成だけに効き、次の問い合わせは主モデルに戻る。
+
+    `before_fallback` で、切り替え元（`from`）、切り替え先（`to`）、きっかけの例外（`error`）、試行番号（`attempt`）を読める。`after_fallback` では、それらに加えて成否（`succeeded?` と `fallback_error`）を読める。使用量とコストは失敗した試行を含めて集計される。使用量の分からない失敗（サーバー側のエラーやタイムアウト）が含まれると、合計のコストは `nil` になる。計装イベント `usage.ruby_llm` は、試行ごとに 1 回ずつ出る。
+
+    このデモでは、主モデル（OpenAI）の送信先を、文脈（`RubyLLM.context`）で到達できないホストに向けて障害を再現している。文脈はアプリ全体の設定の複製なので、予備モデル（Anthropic）にはいつもどおり送られ、ほかのデモにも影響しない。Sentry のトレースには、主モデルの失敗した試行（初回とリトライ 3 回の計 4 回）と、予備モデルの成功した試行が並ぶ。主モデルへの送信は OpenAI に届かないので、課金は起きない。このデモの実行が失敗として記録されるのは、予備モデルも失敗したときである。そのとき失敗の表示のプロバイダーの欄には両方のプロバイダー名が出るが、記録されるのは予備モデル（Anthropic）の失敗である。
+  without_it: |-
+    予備モデルに切り替えるには、例外を rescue して別のモデルの会話を組み立て直し、履歴、指示文、添付を相手のプロバイダーの形で送り直す処理を、自分で書いて保守することになる。
+
+    リトライと切り替えの順序、ストリーミングの途中で失敗したときの扱い、試行ごとの使用量とコストの集計、切り替えの後に元のモデルへ戻す処理も、自分で決めて書くことになる。
   sources:
-    - title: Error Handling（RubyLLM）
-      url: https://rubyllm.com/error-handling/
+    - title: Error Handling（RubyLLM）— Model Fallbacks、Fallback Callbacks、Automatic Retries
+      url: https://rubyllm.com/error-handling/#model-fallbacks
+    - title: What's New in 2.0（RubyLLM）— Model Fallbacks
+      url: https://rubyllm.com/whats-new-in-2-0/#model-fallbacks
+    - title: "Connection, Logging and Contexts（RubyLLM）— Timeouts & Retries（Retry-After と retry_max_interval）、Contexts: Isolated Configurations（送信先の上書き）"
+      url: https://rubyllm.com/configuration-connection/#timeouts--retries
+    - title: Instrumentation and Observability（RubyLLM）— Usage Events（試行ごとのイベント）
+      url: https://rubyllm.com/instrumentation/#usage-events
   scenarios:
     - key: fall_back_to_another_provider
       name: 主モデルが応答できないときに予備モデルで回答する
+      handler: ModelFallbacks::AnswerWithFallback
+      providers: [openai, anthropic]
+      # The fallback is given as a model id. The registry resolves it to
+      # Anthropic, the first provider in its order that offers it.
+      models:
+        model: gpt-5-nano
+        fallback_model: claude-haiku-4-5
+      inputs:
+        - name: inquiry
+          label: 顧客からの問い合わせ文
+          required: true
+          default: |-
+            一昨日注文したコードレス掃除機（注文番号 E-61294）の配送予定日を知りたいです。受け取れない日があるので、配送日時を指定し直すことはできますか。
+      result_kind: fallback_answer
+      # Starting over asks once more, and pays for that one answer again.
+      retryable: true
 
 - key: video-and-speech
   name: Video and Speech Generation

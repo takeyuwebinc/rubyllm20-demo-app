@@ -5,9 +5,11 @@ require_relative "support/screen_helpers"
 require_relative "support/chat_helpers"
 require_relative "support/document_order_assertions"
 
-# Tests never call a provider. A fake key makes the chats they build
-# independent of the developer's .env, and fails any call that slips through.
+# Tests never call a provider. Fake keys make the chats they build
+# independent of the developer's .env, which dotenv reads in tests as well,
+# and fail any call that slips through.
 RubyLLM.config.openai_api_key = "sk-test"
+RubyLLM.config.anthropic_api_key = "sk-ant-test"
 
 # RubyLLM reads its model registry once per process, from the
 # ruby_llm_models table, and falls back to the registry bundled with the gem
