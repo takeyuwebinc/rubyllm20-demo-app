@@ -169,6 +169,121 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  test "shows the web search answer with the searches, the sources, and the model" do
+    run = create_web_search_run(
+      "searches" => [
+        { "type" => "web_search_call", "action" => "search", "queries" => [ "特定商取引法 改正", "返品特約 表示" ], "url" => nil },
+        { "type" => "web_search_call", "action" => "open_page", "queries" => [], "url" => "https://www.caa.go.jp/policies/" }
+      ],
+      "citations" => [
+        { "url" => "https://www.caa.go.jp/policies/", "title" => "特定商取引法ガイド", "text" => "返品の特約の表示", "start_index" => 0, "end_index" => 8 }
+      ]
+    )
+
+    get run_path(run)
+
+    assert_select "[data-web-search-answer]" do
+      assert_select "h2" do |headings|
+        assert_equal %w[回答 行われた検索 出典], headings.map { |heading| heading.text.strip }
+      end
+      assert_select "*", text: "返品の特約の表示が変わりました。"
+      assert_select "[data-search]", 2
+      assert_select "[data-search] code", text: "search"
+      assert_select "[data-search]", text: /特定商取引法 改正/
+      assert_select "[data-search]", text: /返品特約 表示/
+      assert_select "[data-search] code", text: "open_page"
+      assert_select "[data-search] a[href='https://www.caa.go.jp/policies/'][target='_blank'][rel='noopener']"
+      assert_select "[data-citation] a[href='https://www.caa.go.jp/policies/'][target='_blank'][rel='noopener']", text: "特定商取引法ガイド"
+      assert_select "[data-citation]", text: %r{https://www\.caa\.go\.jp/policies/}
+      assert_select "[data-citation]", text: /返品の特約の表示/
+      assert_select "*", text: /gpt-5-nano-2025-08-07/
+      assert_select "*", text: "検索なし", count: 0
+      assert_select "*", text: "出典なし", count: 0
+    end
+  end
+
+  test "shows a URL the model returned that is neither http nor https as text, and the rest as usual" do
+    run = create_web_search_run(
+      "searches" => [ { "type" => "web_search_call", "action" => "open_page", "queries" => [], "url" => "javascript:alert(1)" } ],
+      "citations" => [
+        { "url" => "javascript:alert(2)", "title" => "不正な出典", "text" => "返品の特約の表示" },
+        { "url" => "https://www.caa.go.jp/", "title" => "消費者庁", "text" => nil }
+      ]
+    )
+
+    get run_path(run)
+
+    assert_select "a[href^='javascript']", count: 0
+    assert_select "[data-web-search-answer]" do
+      assert_select "*", text: "返品の特約の表示が変わりました。"
+      assert_select "[data-search]", text: /javascript:alert\(1\)/
+      assert_select "[data-citation]", text: /不正な出典/
+      assert_select "[data-citation]", text: /javascript:alert\(2\)/
+      assert_select "[data-citation] a[href='https://www.caa.go.jp/']", text: "消費者庁"
+      assert_select "*", text: /gpt-5-nano-2025-08-07/
+    end
+  end
+
+  test "says when the model neither searched nor cited, and still shows the answer" do
+    run = create_web_search_run("searches" => [], "citations" => [])
+
+    get run_path(run)
+
+    assert_select "[data-web-search-answer]" do
+      assert_select "*", text: "返品の特約の表示が変わりました。"
+      assert_select "*", text: "検索なし"
+      assert_select "*", text: "出典なし"
+      assert_select "[data-search]", count: 0
+      assert_select "[data-citation]", count: 0
+    end
+  end
+
+  test "links a source without a title by its URL, and names a source without a URL by its title" do
+    run = create_web_search_run("citations" => [
+      { "url" => "https://example.com/returns", "title" => nil, "text" => nil },
+      { "url" => nil, "title" => "URL のない出典", "text" => "返品の特約の表示" }
+    ])
+
+    get run_path(run)
+
+    assert_select "[data-citation] a[href='https://example.com/returns']", text: "https://example.com/returns"
+    assert_select "[data-citation]", text: /URL のない出典/
+    assert_select "[data-citation] a", count: 1
+  end
+
+  test "shows a source that has neither a title nor a URL by its cited span alone, and drops the span when there is none" do
+    run = create_web_search_run("citations" => [
+      { "url" => nil, "title" => nil, "text" => "返品の特約の表示" },
+      { "url" => "https://example.com/returns", "title" => "返品について", "text" => nil }
+    ])
+
+    get run_path(run)
+
+    assert_select "[data-citation]" do |citations|
+      assert_equal 2, citations.size
+      assert_equal "回答の該当箇所: 返品の特約の表示", citations.first.text.strip
+      assert_select citations.first, "a", count: 0
+      assert_select citations.last, "a[href='https://example.com/returns']", text: "返品について"
+      assert_no_match(/回答の該当箇所/, citations.last.text)
+    end
+  end
+
+  test "treats a source whose title is blank as having none and links it by its URL" do
+    run = create_web_search_run("citations" => [ { "url" => "https://example.com/returns", "title" => "", "text" => nil } ])
+
+    get run_path(run)
+
+    assert_select "[data-citation] a[href='https://example.com/returns']", text: "https://example.com/returns"
+  end
+
+  test "shows a search step without an action by its item type" do
+    run = create_web_search_run("searches" => [ { "type" => "web_search_call", "action" => nil, "queries" => [], "url" => nil } ])
+
+    get run_path(run)
+
+    assert_select "[data-search] code", text: "web_search_call"
+  end
+
   test "marks a run waiting for approval in the history and on its demo" do
     run = create_awaiting_run
 
@@ -300,6 +415,17 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
     run.resume!("call_1", decision)
     order = order_result(order_status, refund_reason:, refunded_at:) if order == :from_status
     run.succeed!({ "answer" => "返金を承りました。", "order" => order, "model" => "gpt-5-nano-2025-08-07" })
+    run
+  end
+
+  def create_web_search_run(result)
+    run = create_run(scenario_key: "search_web", input: { "question" => "返品の制度は変わりましたか" })
+    run.succeed!({
+      "answer" => "返品の特約の表示が変わりました。",
+      "model" => "gpt-5-nano-2025-08-07",
+      "searches" => [],
+      "citations" => []
+    }.merge(result))
     run
   end
 

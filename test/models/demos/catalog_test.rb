@@ -72,6 +72,24 @@ module Demos
       assert_equal "refund_decision", scenario.result_kind
     end
 
+    test "starts the web search over when its job runs again, from one question, on OpenAI" do
+      scenario = Catalog.scenario("search_web")
+
+      assert_equal ProviderTools::AnswerWithWebSearch, scenario.handler
+      assert_equal %w[openai], scenario.providers
+      assert_equal true, scenario.retryable
+      assert_equal %w[question], scenario.inputs.map(&:name)
+      assert scenario.inputs.sole.required
+      assert_equal "web_search_answer", scenario.result_kind
+    end
+
+    test "keeps the code execution of Provider Tools being prepared" do
+      scenario = Catalog.scenario("run_code")
+
+      assert_equal "provider-tools", scenario.demo.key
+      assert_not_predicate scenario, :implemented?
+    end
+
     # Availability is judged from the providers a scenario lists, while the
     # handler reaches the provider through the model id. They must agree.
     test "lists the provider each model of an implemented scenario resolves to" do
