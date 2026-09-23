@@ -531,6 +531,20 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-batch-model]", text: "—"
   end
 
+  test "says a ticket was answered but its answer could not be read as a category" do
+    run = create_batch_run(raw_status: "completed")
+    run.succeed!(batch_result([ [ "荷物が届かない。", "succeeded", nil, nil ] ]))
+
+    get run_path(run)
+
+    assert_select "[data-ticket]" do
+      assert_select "[data-ticket-status]", text: "成功"
+      assert_select "[data-ticket-category]", count: 0
+      assert_select "[data-ticket-missing]", count: 0
+      assert_select "[data-ticket-unreadable]", text: /区分として読めなかった.*会話の記録/m
+    end
+  end
+
   test "shows a batch whose every ticket failed as a success, with every ticket failed" do
     run = create_batch_run(raw_status: "completed")
     run.succeed!(batch_result([ [ "荷物が届かない。", "failed", nil, nil ], [ "返品したい。", "failed", nil, nil ] ], model: nil))

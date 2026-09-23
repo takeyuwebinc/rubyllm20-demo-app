@@ -68,17 +68,27 @@ module Batches
 
       private
 
-      # The schema is not stored with the chat, but the answer was written
-      # to it, so it reads as JSON. A ticket whose request failed has no
-      # answer; RubyLLM logs why, and nothing else says.
+      # A ticket whose request failed has no answer; RubyLLM logs why, and
+      # nothing else says.
       def ticket(chat, answer, status)
-        classification = answer&.parsed
+        classification = classification(answer) || {}
         {
           "text" => chat.messages.find { |message| message.role == :user }.content,
           "status" => status.to_s,
-          "category" => classification&.fetch("category", nil),
-          "reason" => classification&.fetch("reason", nil)
+          "category" => classification["category"],
+          "reason" => classification["reason"]
         }
+      end
+
+      # The schema is not stored with the chat, but the answer was written
+      # to it, so it reads as JSON. An answer that does not, such as a
+      # refusal, is left without a category rather than failing the whole
+      # batch, whose other answers were billed.
+      def classification(answer)
+        parsed = answer&.parsed
+        parsed if parsed.is_a?(Hash)
+      rescue JSON::ParserError
+        nil
       end
     end
   end

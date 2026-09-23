@@ -1,5 +1,6 @@
 <%# The tickets come in the order they were submitted, which is the order of the batch's requests. A ticket whose request
-    failed or was cancelled has no answer; RubyLLM logs why a request failed, and the batch reports no reason. %>
+    failed or was cancelled has no answer; RubyLLM logs why a request failed, and the batch reports no reason. A ticket
+    answered with something that does not read as a category keeps its answer in its chat only. %>
 <% result = run.result %>
 <div data-batch-classification class="max-w-prose space-y-6">
   <dl class="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-sm">
@@ -20,13 +21,15 @@
           <p data-ticket-text class="whitespace-pre-wrap break-words text-gray-900"><%= ticket["text"] %></p>
           <%= request_status_badge(ticket["status"]) %>
         </div>
-        <% if ticket["category"] %>
+        <% if ticket["status"] == "succeeded" && ticket["category"] %>
           <dl class="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-sm">
             <dt class="text-gray-500">区分</dt>
             <dd data-ticket-category class="font-medium text-gray-900"><%= ticket["category"] %></dd>
             <dt class="text-gray-500">理由</dt>
             <dd data-ticket-reason class="break-words text-gray-800"><%= ticket["reason"] %></dd>
           </dl>
+        <% elsif ticket["status"] == "succeeded" %>
+          <p data-ticket-unreadable class="text-sm text-gray-600">回答はあるが、区分として読めなかった。回答の本文は会話の記録（<code>chats</code> と <code>messages</code>）にある。</p>
         <% elsif ticket["status"] == "cancelled" %>
           <p data-ticket-missing class="text-sm text-gray-600">回答がない。バッチが取り消されたため、処理されなかった。</p>
         <% else %>

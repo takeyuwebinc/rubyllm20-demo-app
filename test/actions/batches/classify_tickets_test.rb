@@ -159,6 +159,28 @@ module Batches
       end
     end
 
+    test "keeps an answer it cannot read as a category as a success without a category, and the other tickets' results" do
+      with_openai_batches do |openai|
+        perform(TICKETS.first(3).join("\n\n"))
+        refusal = RubyLLM::Message.new(role: :assistant, content: "申し訳ありませんが、分類できません。", model: "gpt-5-nano-2025-08-07", input_tokens: 180, output_tokens: 12)
+        no_category = RubyLLM::Message.new(role: :assistant, content: { reason: "判断できない" }.to_json, model: "gpt-5-nano-2025-08-07", input_tokens: 180, output_tokens: 12)
+        end_batch(openai, "completed", { "total" => 3, "completed" => 3, "failed" => 0 }, [
+          [ 0, refusal, nil ],
+          [ 1, no_category, nil ],
+          [ 2, classification_answer("商品の不具合", "電源が入らないため"), nil ]
+        ])
+
+        result = ClassifyTickets.resume("batch_1")
+
+        assert_equal [
+          [ "succeeded", nil, nil ],
+          [ "succeeded", nil, "判断できない" ],
+          [ "succeeded", "商品の不具合", "電源が入らないため" ]
+        ], result["tickets"].map { |ticket| ticket.values_at("status", "category", "reason") }
+        assert_equal "申し訳ありませんが、分類できません。", Chat.order(:id).last(3).first.messages.order(:id).last.content
+      end
+    end
+
     test "collects a batch again without adding any answer twice" do
       with_openai_batches do |openai|
         perform(TICKETS.first(2).join("\n\n"))
