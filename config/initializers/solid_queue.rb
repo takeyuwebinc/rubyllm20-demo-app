@@ -1,7 +1,9 @@
 # When a worker dies, Solid Queue marks the jobs it had claimed as failed and
 # does not run them again, since the job itself may be what killed the worker.
-# A demo run whose job was lost that way would stay running forever, so it is
-# failed here with the reason shown to the reader.
+# A demo run whose job was lost that way would stay running forever, so the
+# run is handed over here, and decides for itself: it fails with the reason
+# shown to the reader, or, when it has work under way at a provider, queues
+# its job again.
 #
 # The event fires in whichever Solid Queue process notices the dead one, so it
 # is subscribed in an initializer that every process loads. The block looks

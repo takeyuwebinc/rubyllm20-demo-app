@@ -17,8 +17,9 @@ module Demos
         nil
       end
 
-      # Fails the runs of the given Solid Queue jobs, which a dead worker had
-      # claimed and Solid Queue will not run again.
+      # Hands the runs of the given Solid Queue jobs, which a dead worker had
+      # claimed and Solid Queue will not run again, to Run.fail_abandoned!,
+      # which fails each run or queues its job again.
       def fail_abandoned(solid_queue_job_ids, error = nil)
         runs = SolidQueue::Job.where(id: solid_queue_job_ids, class_name: name).filter_map { |job| run_from(job.arguments) }
         Run.fail_abandoned!(runs.map(&:id), message: error&.message)

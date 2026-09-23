@@ -439,6 +439,17 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
     assert_select "a[href*='/explore/agents/conversations/#{run.conversation_id}/']", text: "Sentry で会話を開く"
   end
 
+  test "dates each trace link by when its trace was recorded, and a bare trace id by the run's start" do
+    started_at = Time.zone.local(2026, 9, 23, 10, 0, 0)
+    collected_at = Time.zone.local(2026, 9, 24, 9, 30, 0)
+    run = create_run(started_at: started_at, trace_ids: [ "11111111111111111111111111111111", { "id" => "22222222222222222222222222222222", "at" => collected_at.iso8601(3) } ])
+
+    with_env(SENTRY) { get run_path(run) }
+
+    assert_select "a[href*='/trace/22222222222222222222222222222222/'][href*='timestamp=#{collected_at.to_i}']", text: "Sentry でトレースを開く"
+    assert_select "a[href*='/trace/11111111111111111111111111111111/'][href*='timestamp=#{started_at.to_i}']", text: "以前のトレース 1"
+  end
+
   test "offers only the conversation when no trace was recorded" do
     with_env(SENTRY) { get run_path(create_run) }
 

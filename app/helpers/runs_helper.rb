@@ -71,8 +71,8 @@ module RunsHelper
     @sentry_links ||= Observability::SentryLinks.from_env
   end
 
-  def sentry_trace_url(run, trace_id)
-    sentry_links.trace_url(trace_id, at: run.started_at || run.created_at)
+  def sentry_trace_url(trace)
+    sentry_links.trace_url(trace.id, at: trace.at)
   end
 
   def sentry_conversation_url(run)

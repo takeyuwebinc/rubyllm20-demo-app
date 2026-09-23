@@ -247,7 +247,7 @@ module Demos
       workflow_span = with_tracing { perform }
 
       assert_equal @run.conversation_id, workflow_span.attributes["gen_ai.conversation.id"]
-      assert_equal [ workflow_span.hex_trace_id ], @run.reload.trace_ids
+      assert_equal [ workflow_span.hex_trace_id ], @run.reload.traces.map(&:id)
     end
 
     test "records the trace of a run that stopped for approval" do
@@ -258,7 +258,7 @@ module Demos
       workflow_span = with_tracing { perform(retryable: false) }
 
       assert_predicate @run.reload, :awaiting_approval?
-      assert_equal [ workflow_span.hex_trace_id ], @run.trace_ids
+      assert_equal [ workflow_span.hex_trace_id ], @run.traces.map(&:id)
     end
 
     test "records no trace id when tracing is off" do

@@ -15,16 +15,16 @@
       </div>
       <% if sentry_links.available? %>
         <div data-sentry-links class="flex flex-wrap items-center gap-3">
-          <% newest, *older = run.trace_ids.reverse %>
+          <% newest, *older = run.traces.reverse %>
           <% if newest %>
             <%# While the run waits for a decision, 承認する is the page's one primary action. Once the run has ended,
                 the trace is the main way to look into what happened, so the link takes the primary rank back. %>
-            <%= link_to "Sentry でトレースを開く", sentry_trace_url(run, newest), target: "_blank", rel: "noopener",
+            <%= link_to "Sentry でトレースを開く", sentry_trace_url(newest), target: "_blank", rel: "noopener",
                   class: run.awaiting_approval? ? "btn-secondary" : "btn-primary" %>
           <% end %>
           <%= link_to "Sentry で会話を開く", sentry_conversation_url(run), target: "_blank", rel: "noopener", class: "btn-secondary" %>
-          <% older.each.with_index(1) do |trace_id, index| %>
-            <%= link_to "以前のトレース #{index}", sentry_trace_url(run, trace_id), target: "_blank", rel: "noopener", class: "btn-secondary" %>
+          <% older.each.with_index(1) do |trace, index| %>
+            <%= link_to "以前のトレース #{index}", sentry_trace_url(trace), target: "_blank", rel: "noopener", class: "btn-secondary" %>
           <% end %>
         </div>
       <% else %>

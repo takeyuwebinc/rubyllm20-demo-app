@@ -5,6 +5,17 @@ module Demos
 
     FINISHED = %w[succeeded failed cancelled].freeze
 
+    # How long after the run left work with a provider it keeps waiting for
+    # that work. OpenAI ends a batch within 24 hours of its submission,
+    # whatever became of it, so a run that still cannot reach its batch
+    # after twice that gives up rather than wait forever.
+    REMOTE_JOB_DEADLINE = 48.hours
+
+    # A trace of the run, and when it was recorded. Sentry looks a trace up
+    # around a given time, and a run that collects work left with a
+    # provider records its traces hours or days apart.
+    Trace = Data.define(:id, :at)
+
     # A finished run never changes state, so its result cannot be rewritten
     # after the fact.
     TRANSITIONS = {
@@ -64,10 +75,20 @@ module Demos
       end
 
       # Solid Queue does not run a dead worker's jobs again, so their runs
-      # would otherwise stay running forever. A run waiting for approval has
-      # no job, so it is never among them.
+      # would otherwise stay running forever. A run that left work with a
+      # provider is queued again instead: the work goes on at the provider,
+      # checking on it costs nothing, and collecting it again adds no answer
+      # twice. Only until the deadline, so that a job that kills its worker
+      # every time is not queued forever. A run waiting for approval has no
+      # job, so it is never among them.
       def fail_abandoned!(run_ids, message: nil)
-        running.where(id: run_ids).find_each { |run| run.fail_as!(FailureKinds::WORKER_LOST, message:) }
+        running.where(id: run_ids).find_each do |run|
+          if run.remote_job? && !run.remote_job_overdue?
+            RunJob.perform_later(run)
+          else
+            run.fail_as!(FailureKinds::WORKER_LOST, message:)
+          end
+        end
       end
 
       private
@@ -143,22 +164,33 @@ module Demos
 
     def fail_with!(error)
       kind = FailureKinds.for(error)
-      fail!(
+      fail!({
         "provider" => scenario&.providers&.map { |slug| Demos.provider_name(slug) }&.join("、"),
         "kind" => kind&.name || error.class.name,
         "error_class" => error.class.name,
         "message" => error.message,
         "hint" => kind&.hint
-      )
+      })
     end
 
-    def fail!(failure)
-      update!(status: :failed, failure: failure, finished_at: Time.current)
+    # A failed run may still have a result, such as the part of a batch the
+    # provider finished before the batch expired, which was billed.
+    def fail!(failure, result: nil)
+      refuse_transition!("failed")
+      update!(status: :failed, failure: failure, result: result, finished_at: Time.current)
+    end
+
+    # Records that the provider cancelled the work the run left with it. The
+    # reason is kept where a failure's is, and the part the provider
+    # finished before it was cancelled, if any, as the result.
+    def cancel!(failure, result: nil)
+      refuse_unless_running!
+      update!(status: :cancelled, failure: failure, result: result, finished_at: Time.current)
     end
 
     # Fails the run for a reason other than a provider call.
     def fail_as!(kind, message: nil)
-      fail!("kind" => kind.name, "message" => message, "hint" => kind.hint)
+      fail!({ "kind" => kind.name, "message" => message, "hint" => kind.hint })
     end
 
     # Stops the run until a person decides on the chat's pending tool calls.
@@ -196,7 +228,64 @@ module Demos
     end
 
     def add_trace_id!(trace_id)
-      update!(trace_ids: trace_ids + [ trace_id ]) unless trace_ids.include?(trace_id)
+      return if traces.any? { |trace| trace.id == trace_id }
+
+      update!(trace_ids: trace_ids + [ { "id" => trace_id, "at" => Time.current.iso8601(3) } ])
+    end
+
+    # A trace kept as a bare id, with no time of its own, is dated by the
+    # run's start, or by its creation.
+    def traces
+      trace_ids.map do |entry|
+        entry.is_a?(Hash) ? Trace.new(entry["id"], Time.zone.parse(entry["at"])) : Trace.new(entry, started_at || created_at)
+      end
+    end
+
+    # Keeps what the run left with a provider, such as a batch, so that a
+    # later job can check on it and collect it. +state+ is the work as the
+    # scenario reads it (kind, id, provider, raw_status, request_counts).
+    # The run stays running meanwhile: the work is under way at the
+    # provider, and a run has no status of its own for that.
+    def keep_remote_job!(state)
+      refuse_unless_running!
+      update!(remote_job: {
+        "kind" => state.kind,
+        "id" => state.id,
+        "provider" => state.provider,
+        "submitted_at" => Time.current.iso8601(3),
+        "raw_status" => state.raw_status,
+        "request_counts" => state.request_counts,
+        "checked_at" => nil,
+        "check_failure" => nil
+      })
+    end
+
+    def remote_job?
+      remote_job.present?
+    end
+
+    # Keeps what a check on the work found. A check that got through clears
+    # the last failed one.
+    def record_remote_check!(state)
+      refuse_unless_running!
+      update!(remote_job: remote_job.merge(
+        "raw_status" => state.raw_status,
+        "request_counts" => state.request_counts,
+        "checked_at" => Time.current.iso8601(3),
+        "check_failure" => nil
+      ))
+    end
+
+    # Keeps why the last check on the work could not reach the provider.
+    # What the previous check found stays as it was.
+    def record_remote_check_failure!(error)
+      refuse_unless_running!
+      failure = { "kind" => FailureKinds.for(error)&.name || error.class.name, "message" => error.message, "at" => Time.current.iso8601(3) }
+      update!(remote_job: remote_job.merge("check_failure" => failure))
+    end
+
+    def remote_job_overdue?(now = Time.current)
+      now > Time.zone.parse(remote_job.fetch("submitted_at")) + REMOTE_JOB_DEADLINE
     end
 
     private
@@ -221,6 +310,16 @@ module Demos
       return if self.class.transition?(status, to)
 
       add_transition_error(status, to)
+      raise ActiveRecord::RecordInvalid, self
+    end
+
+    # Only a running run has work under way with a provider. The transitions
+    # would let a run waiting for approval be cancelled, and a save that
+    # leaves the status as it is is not validated at all.
+    def refuse_unless_running!
+      return if running?
+
+      errors.add(:status, :not_running, message: "が running でない（#{status}）")
       raise ActiveRecord::RecordInvalid, self
     end
 
