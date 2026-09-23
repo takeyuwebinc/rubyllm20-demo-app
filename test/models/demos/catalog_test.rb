@@ -178,8 +178,26 @@ module Demos
       assert_equal [ "research_topic" ], without_models.map(&:key)
     end
 
-    test "keeps the text tokenization scenario in preparation" do
-      assert_not Catalog.scenario("tokenize_text").implemented?
+    test "tokenizes text with xAI from one required text, and starts over when its job runs again" do
+      scenario = Catalog.scenario("tokenize_text")
+
+      assert_equal Tokenization::TokenizeText, scenario.handler
+      assert_equal %w[xai], scenario.providers
+      assert_equal({ "model" => "grok-4.3" }, scenario.models)
+      assert_equal %w[text], scenario.inputs.map(&:name)
+      assert scenario.inputs.sole.required
+      assert scenario.inputs.sole.default.end_with?("よろしくお願いします🙏")
+      assert_equal "tokenization", scenario.result_kind
+      assert_equal true, scenario.retryable
+    end
+
+    # The handler names xAI when it tokenizes, so the model must be one of
+    # xAI's own.
+    test "tokenizes text with a model that resolves to xAI when xAI is named" do
+      model = RubyLLM.models.find(Catalog.scenario("tokenize_text").models.fetch("model"), provider: :xai)
+
+      assert_equal "xai", model.provider
+      assert_equal "grok-4.3", model.id
     end
 
     test "answers from the return policy with Anthropic, from one inquiry, and starts over when its job runs again" do
@@ -262,8 +280,13 @@ module Demos
 
     # Availability is judged from the providers a scenario lists, while the
     # handler reaches the provider through the model id. They must agree.
+    #
+    # tokenize_text is left out: its handler names the provider, because
+    # grok-4.3 alone resolves to Perplexity's xai/grok-4.3. Resolving every
+    # model with its provider named instead would no longer check where the
+    # handlers that give the model id alone end up.
     test "lists the provider each model of an implemented scenario resolves to" do
-      Catalog.demos.flat_map(&:scenarios).select(&:implemented?).each do |scenario|
+      Catalog.demos.flat_map(&:scenarios).select(&:implemented?).reject { |scenario| scenario.key == "tokenize_text" }.each do |scenario|
         scenario.models.each_value do |model_id|
           assert_includes scenario.providers, RubyLLM.models.find(model_id).provider, "#{scenario.key}: #{model_id}"
         end

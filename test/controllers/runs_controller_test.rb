@@ -840,6 +840,87 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-token-count] dt", text: "最大出力トークン数", count: 0
   end
 
+  test "shows the token count, the tokenizer's model, and each token's string and id in text order" do
+    run = create_tokenization_run([ [ 5001, " 返品", [ 32, 232, 191, 148, 229, 147, 129 ] ], [ 5002, "でき", [ 227, 129, 167, 227, 129, 141 ] ], [ 5003, "ます ", [ 227, 129, 190, 227, 129, 153, 32 ] ] ])
+
+    get run_path(run)
+
+    assert_select "[data-run-status]", text: "成功"
+    assert_equal [ "トークン数", "3" ], tokenization_row("token-total")
+    assert_equal [ "モデル", "grok-4.3" ], tokenization_row("tokenizer-model")
+    assert_equal [ " 返品", "でき", "ます " ], token_strings
+    assert_equal %w[5001 5002 5003], css_select("[data-tokenization] [data-token] [data-token-id]").map(&:text)
+    assert_select "[data-tokenization] [data-token-fragment]", count: 0
+    assert_select "[data-tokenization] [data-fragment-legend]", count: 0
+  end
+
+  # Browsers collapse spaces, tabs, and line breaks unless the style keeps
+  # them.
+  test "keeps the spaces, tabs, and line breaks of a token as they are" do
+    run = create_tokenization_run([ [ 1, "\n", [ 10 ] ], [ 2, "\t", [ 9 ] ], [ 3, "   ", [ 32, 32, 32 ] ], [ 4, " a\tb\n", [ 32, 97, 9, 98, 10 ] ] ])
+
+    get run_path(run)
+
+    assert_equal [ "\n", "\t", "   ", " a\tb\n" ], token_strings
+    css_select("[data-tokenization] [data-token-string]").each do |string|
+      assert_includes string["class"].split, "whitespace-pre-wrap"
+    end
+  end
+
+  test "shows the HTML special characters of a token as text" do
+    run = create_tokenization_run([ [ 1, "<b>", [ 60, 98, 62 ] ], [ 2, "&amp;", [ 38, 97, 109, 112, 59 ] ], [ 3, "\"'", [ 34, 39 ] ] ])
+
+    get run_path(run)
+
+    assert_equal [ "<b>", "&amp;", "\"'" ], token_strings
+    assert_select "[data-tokenization] [data-token-string] b", count: 0
+  end
+
+  # A token that ends partway through a character has an empty string.
+  test "shows a token with an empty string by its bytes in hexadecimal, marked as a fragment" do
+    run = create_tokenization_run([ [ 7001, "します", [ 227, 129, 151, 227, 129, 190, 227, 129, 153 ] ], [ 7002, "", [ 240, 159, 153 ] ], [ 7003, "", [ 143 ] ], [ 7004, "", [ 9, 255 ] ] ])
+
+    get run_path(run)
+
+    assert_equal [ "します" ], token_strings
+    assert_equal [ "f0 9f 99", "8f", "09 ff" ], css_select("[data-tokenization] [data-token-fragment]").map { |fragment| fragment.text.strip }
+    assert_equal %w[7001 7002 7003 7004], css_select("[data-tokenization] [data-token] [data-token-id]").map(&:text)
+    # The dashed frame is the mark the legend explains.
+    frames = css_select("[data-tokenization] [data-token]").map { |token| token["class"].split.include?("border-dashed") }
+    assert_equal [ false, true, true, true ], frames
+    assert_select "[data-tokenization] [data-fragment-legend]", text: /点線の枠は、文字の途中で割れたトークン/
+  end
+
+  test "shows a text of one token as a count of 1 and that token" do
+    run = create_tokenization_run([ [ 1, "   ", [ 32, 32, 32 ] ] ])
+
+    get run_path(run)
+
+    assert_equal [ "トークン数", "1" ], tokenization_row("token-total")
+    assert_select "[data-tokenization] [data-token]", count: 1
+    assert_equal [ "   " ], token_strings
+  end
+
+  test "explains the dashed frame when a single token of the text is a fragment" do
+    run = create_tokenization_run([ [ 1, "よろしく", [ 227, 130, 136, 227, 130, 141, 227, 129, 151, 227, 129, 143 ] ], [ 2, "", [ 240, 159, 153, 143 ] ] ])
+
+    get run_path(run)
+
+    assert_select "[data-tokenization] [data-token-fragment]", count: 1
+    assert_select "[data-tokenization] [data-fragment-legend]", count: 1
+  end
+
+  test "shows every token of a long text, with the count in groups of three digits" do
+    run = create_tokenization_run(Array.new(20_000) { |index| [ index, "語#{index}", "語#{index}".bytes ] })
+
+    get run_path(run)
+
+    assert_equal [ "トークン数", "20,000" ], tokenization_row("token-total")
+    strings = token_strings
+    assert_equal 20_000, strings.size
+    assert_equal [ "語0", "語1", "語19999" ], strings.values_at(0, 1, -1)
+  end
+
   test "shows the research report, its sources, steps, thinking, usage, and agent, and the job ID under the status" do
     run = create_research_run(result: research_result)
 
@@ -1333,6 +1414,29 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
     run = create_run(scenario_key: "count_tokens", input: { "instructions" => "サポートの担当者です。", "question" => "返品できますか。" })
     run.succeed!(result.merge("model" => "gpt-5-nano"))
     run
+  end
+
+  # A run that tokenized a text into [id, string, bytes] triples, with the
+  # result as the action returns it.
+  def create_tokenization_run(tokens)
+    run = create_run(scenario_key: "tokenize_text", input: { "text" => tokens.map { |_, string, _| string }.join })
+    run.succeed!({
+      "count" => tokens.size,
+      "model" => "grok-4.3",
+      "tokens" => tokens.map { |id, string, bytes| { "id" => id, "string" => string, "bytes" => bytes } }
+    })
+    run
+  end
+
+  # The label and the value of one row of the tokenization.
+  def tokenization_row(field)
+    value = css_select("[data-tokenization] [data-#{field}]").sole
+    [ value.previous_element.text.strip, value.text.strip ]
+  end
+
+  # The strings of the tokens shown with one, in the order shown.
+  def token_strings
+    css_select("[data-tokenization] [data-token] [data-token-string]").map(&:text)
   end
 
   # A source as the Citations scenario records it, with the given fields in

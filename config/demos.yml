@@ -456,10 +456,20 @@
     計数は、出力の長さも、課金される使用量も示さない。送信後の使用量は、応答の `tokens` と `cost` で読む。プロバイダー側のツール、`provider_options`、compaction、`before_request` による変更は数えられないので、それらを使う会話では、実際に送る入力と数がずれることがある。計数は使用量を記録せず、chat の計装イベントも発行しない。このアプリの Sentry のトレースには計数のリクエストだけが載り、トークン数とコストは載らない。数えた結果は実行の画面で読む。
 
     会話の計数（`count_tokens`）とテキストの分割（`RubyLLM.tokenize`）は、プロバイダーの別のエンドポイントを使う。会話を数えられるのは OpenAI、Anthropic、Gemini、Bedrock、Vertex AI（Gemini のモデルに限る。Vertex AI 上の Claude では数えられない）である。xAI、Cohere、GPUStack はテキストの分割にだけ対応する。公式の Provider API Coverage の表は 2 つを「Token counting」の 1 行にまとめているため、xAI でも会話を数えられるように見える。対応しないプロバイダーでは `RubyLLM::Error` になる。
+
+    テキストの分割は、テキストがどのトークンに割れるか（日本語の語の区切り、数字と記号の扱い）を、モデルのトークナイザーそのもので確かめたい場合に役立つ。`RubyLLM.tokenize(text, model:, provider:)` は `RubyLLM::Tokenization` を返す。`ids` はトークン ID の配列（テキストの順）、`count` はその数である。`raw` には xAI が返した応答がそのまま入り、トークンごとの文字列（`string_token`）とバイト列（`token_bytes`）が読める。
+
+    分割は渡した文字列だけを対象にし、指示文、ツール、添付、会話の整形を含まない。課金される使用量も示さない。トークン ID はモデルごとに違うので、比べるときは同じモデルを使う。計装イベント `tokenization.ruby_llm` はテキストを含まないので、このアプリの Sentry のトレースには分割のスパンとトークン数、xAI へのリクエストだけが載る。トークンの列は実行の画面で読む。
+
+    絵文字のような 4 バイトの文字は、文字の途中で割れることがある。途中で割れたトークンは文字列が空になるので、バイト列で読む。すべてのトークンのバイト列をつなぐと元のテキストに戻るが、文字列をつないでも戻らない。これは xAI の文書には書かれておらず、このアプリで実際の API（`grok-4.3`）を呼んで確かめた事実である（2026-09-23）。既定の入力の末尾の「🙏」も、文字列が空の 2 つのトークンに割れる。
+
+    このデモは `provider: :xai` を渡している。RubyLLM 2.0.0 では、`provider:` を渡さずに `grok-4.3` を指定すると、モデルの登録簿の別名（Vertex AI 用の `xai/grok-4.3`）とプロバイダーの優先順位により Perplexity のモデルに解決される。そのため、xAI の設定値があっても Perplexity の設定値が足りないという `RubyLLM::ConfigurationError` になる。公式ガイドの例は `provider:` を省いているが、2.0.0 ではその呼び方は失敗する。
   without_it: |-
     ローカルのトークナイザー（tiktoken など）で見積もると、指示文やメッセージの区切りの整形、ツール定義、画像、モデルごとの違いを自分で再現する必要があり、プロバイダーが数える値とずれる。
 
     送ってみて、上限超過のエラー（`RubyLLM::ContextLengthExceededError`）で知る方法では、送ってからでないと分からない。上限に近い入力を、送る前に切り詰める判断ができない。
+
+    テキストがどのトークンに割れるかを知るには、モデルの語彙に合うトークナイザーを手元に用意して保守することになる。モデルを変えると分割も変わるので、そのたびに追随が要る。文字数から見積もる方法では、日本語の 1 文字が 1 トークンにも、2 文字が 1 トークンにもなる（このアプリで確かめた）ため、どこで割れるかも、上限に近い入力をどこで切り詰めればよいかも分からない。
   sources:
     - title: Tokenization（RubyLLM）— Counting a Chat Request と Token Counts and Usage
       url: https://rubyllm.com/tokenization/#counting-a-chat-request
@@ -469,6 +479,10 @@
       url: https://developers.openai.com/api/docs/guides/token-counting
     - title: Get input token counts（OpenAI）
       url: https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens/methods/count
+    - title: Tokenization（RubyLLM）— Tokenizing Text
+      url: https://rubyllm.com/tokenization/#tokenizing-text
+    - title: Tokenize text（xAI）— 要求と応答の項目（トークンの ID、文字列、バイト列）
+      url: https://docs.x.ai/developers/rest-api-reference/inference/other#tokenize-text
   scenarios:
     - key: count_tokens
       name: 送信前に入力のトークン数を数える
@@ -502,6 +516,24 @@
       retryable: true
     - key: tokenize_text
       name: テキストのトークンへの分割を見る
+      handler: Tokenization::TokenizeText
+      providers: [xai]
+      # The model bin/check_keys and the RubyLLM guide use. The handler names
+      # xAI as the provider, since the id alone resolves to another one.
+      models:
+        model: grok-4.3
+      inputs:
+        - name: text
+          label: 分割を確認するテキスト
+          required: true
+          # The inquiry of count_tokens, closed with a four-byte emoji that
+          # xAI splits partway, so that the default run shows tokens with an
+          # empty string.
+          default: |-
+            3 週間前に届いた電気ケトル（注文番号 D-40518）を開封して使ってみましたが、思っていたより音が大きいので返品したいです。返品できますか。返送の送料はどちらの負担になりますか。よろしくお願いします🙏
+      result_kind: tokenization
+      # Tokenizing changes nothing, so starting over only tokenizes again.
+      retryable: true
 
 - key: workflow-instrumentation
   name: Workflow Instrumentation

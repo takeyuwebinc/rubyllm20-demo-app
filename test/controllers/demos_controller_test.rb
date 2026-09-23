@@ -274,12 +274,14 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
     assert_select "#generate_product_video input[type=submit][value='実行する']:not([disabled])"
   end
 
+  # xAI settings are left out, so that the listing is runnable through the
+  # token count alone.
   test "shows the token count as runnable with its explanation, sources, code, and default inputs" do
-    with_openai_key("sk-test") { get root_path }
+    with_openai_key("sk-test") { with_xai_key(nil) { get root_path } }
 
     assert_select "[data-demo='tokenization'] [data-availability]", text: "実行できる"
 
-    with_openai_key("sk-test") { get demo_path("tokenization") }
+    with_openai_key("sk-test") { with_xai_key(nil) { get demo_path("tokenization") } }
 
     assert_select "h2", text: "役立つケース"
     assert_select "*", text: /質問は会話に加えない/
@@ -296,21 +298,65 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
       assert_select "textarea[name='run[input][question]']", text: /D-40518/
       assert_select "input[type=submit][value='実行する']:not([disabled])"
     end
+  end
+
+  test "shows the text tokenization as runnable with its explanation, sources, code, and default text" do
+    with_openai_key("sk-test") { with_xai_key("xai-test") { get demo_path("tokenization") } }
+
+    assert_select "*", text: /テキストの分割は、テキストがどのトークンに割れるか/
+    assert_select "*", text: /文字列が空になるので、バイト列で読む/
+    assert_select "*", text: /Perplexity のモデルに解決される/
+    assert_select "*", text: /モデルの語彙に合うトークナイザーを手元に用意して保守する/
+    assert_select "h2", text: "出典" do |heading|
+      assert_equal 6, heading.first.next_element.css("li a[target='_blank']").size
+    end
+    assert_select "a[href='https://rubyllm.com/tokenization/#tokenizing-text'][target='_blank']"
+    assert_select "a[href='https://docs.x.ai/developers/rest-api-reference/inference/other#tokenize-text'][target='_blank']"
     assert_select "#tokenize_text" do
-      assert_select "*", text: /準備中/
-      assert_select "textarea", count: 0
+      assert_select "[data-availability]", text: "実行できる"
+      assert_select "pre code", text: /RubyLLM\.tokenize\(@text, model: @model, provider: :xai\)/
+      assert_select "textarea[name='run[input][text]']", text: /D-40518.*よろしくお願いします🙏/
+      assert_select "input[type=submit][value='実行する']:not([disabled])"
     end
   end
 
-  test "keeps the token count from running without OpenAI settings" do
-    with_openai_key(nil) { get root_path }
+  test "keeps the text tokenization from running without xAI settings, and the token count runnable" do
+    with_openai_key("sk-test") { with_xai_key(nil) { get root_path } }
 
-    assert_select "[data-demo='tokenization'] [data-availability]", text: "設定値が足りない（OpenAI）"
+    assert_select "[data-demo='tokenization'] [data-availability]", text: "実行できる"
 
-    with_openai_key(nil) { get demo_path("tokenization") }
+    with_openai_key("sk-test") { with_xai_key(nil) { get demo_path("tokenization") } }
+
+    assert_select "#tokenize_text [data-availability]", text: "設定値が足りない（xAI）"
+    assert_select "#tokenize_text input[type=submit][value='実行する'][disabled]"
+    assert_select "#count_tokens [data-availability]", text: "実行できる"
+    assert_select "#count_tokens input[type=submit][value='実行する']:not([disabled])"
+  end
+
+  test "keeps both tokenization scenarios from running without OpenAI and xAI settings" do
+    with_openai_key(nil) { with_xai_key(nil) { get root_path } }
+
+    assert_select "[data-demo='tokenization'] [data-availability]", text: "設定値が足りない（OpenAI、xAI）"
+
+    with_openai_key(nil) { with_xai_key(nil) { get demo_path("tokenization") } }
 
     assert_select "#count_tokens [data-availability]", text: "設定値が足りない（OpenAI）"
     assert_select "#count_tokens input[type=submit][value='実行する'][disabled]"
+    assert_select "#tokenize_text [data-availability]", text: "設定値が足りない（xAI）"
+    assert_select "#tokenize_text input[type=submit][value='実行する'][disabled]"
+  end
+
+  test "keeps only the token count from running with xAI settings alone" do
+    with_openai_key(nil) { with_xai_key("xai-test") { get root_path } }
+
+    assert_select "[data-demo='tokenization'] [data-availability]", text: "実行できる"
+
+    with_openai_key(nil) { with_xai_key("xai-test") { get demo_path("tokenization") } }
+
+    assert_select "#count_tokens [data-availability]", text: "設定値が足りない（OpenAI）"
+    assert_select "#count_tokens input[type=submit][value='実行する'][disabled]"
+    assert_select "#tokenize_text [data-availability]", text: "実行できる"
+    assert_select "#tokenize_text input[type=submit][value='実行する']:not([disabled])"
   end
 
   test "shows the research as runnable with its explanation, sources, code, and default topic" do
@@ -435,9 +481,9 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
   end
 
   test "shows a scenario being prepared without code or input" do
-    get demo_path("tokenization")
+    get demo_path("batches")
 
-    assert_select "#tokenize_text" do
+    assert_select "#classify_tickets" do
       assert_select "*", text: /準備中/
       assert_select "pre", count: 0
       assert_select "textarea", count: 0
