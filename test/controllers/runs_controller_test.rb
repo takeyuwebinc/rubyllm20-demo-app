@@ -2,6 +2,8 @@ require "test_helper"
 
 class RunsControllerTest < ActionDispatch::IntegrationTest
   SENTRY = { "SENTRY_ORG" => "example-org", "SENTRY_DSN" => "https://public-key@o1.ingest.sentry.io/42" }.freeze
+  NO_SENTRY = { "SENTRY_ORG" => "", "SENTRY_DSN" => "" }.freeze
+  TRACE_IDS = %w[11111111111111111111111111111111 22222222222222222222222222222222].freeze
 
   test "shows a running run, polls it, and says to check the worker" do
     run = create_run
@@ -284,6 +286,51 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-search] code", text: "web_search_call"
   end
 
+  test "plays the generated speech, offers it to save, and says it is AI-generated" do
+    run = create_speech_run
+
+    get run_path(run)
+
+    assert_select "[data-run-status]", text: "成功"
+    assert_shows_speech(run)
+  end
+
+  test "says the speech is missing when its attachment is gone, and shows the rest" do
+    run = create_speech_run
+    run.generated_files.sole.purge
+
+    get run_path(run)
+
+    assert_select "[data-speech]" do
+      assert_select "[data-speech-missing]", text: "音声が見つからない"
+      assert_select "audio", count: 0
+      assert_select "a", text: "音声を保存する", count: 0
+      assert_select "dd", text: "gpt-4o-mini-tts"
+      assert_select "dd", text: "marin"
+      assert_select "dd", text: "mp3"
+      assert_select "dd", text: "16 文字"
+      assert_select "dd", text: "46.9 KB"
+      assert_select "*", text: /AI が生成したもの/
+    end
+  end
+
+  # An audio element plays only what is served inline, and seeks with ranges.
+  test "serves the generated speech inline, and in part when a range is asked for" do
+    run = create_speech_run
+
+    get rails_blob_path(run.generated_files.sole, only_path: true)
+    follow_redirect!
+
+    assert_response :success
+    assert_equal "audio/mpeg", response.media_type
+    assert_match(/\Ainline/, response.headers["Content-Disposition"])
+
+    get request.url, headers: { "Range" => "bytes=1000-1999" }
+
+    assert_response :partial_content
+    assert_equal 1000, response.body.bytesize
+  end
+
   test "marks a run waiting for approval in the history and on its demo" do
     run = create_awaiting_run
 
@@ -330,6 +377,78 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
 
     assert_select "a", text: "Sentry でトレースを開く", count: 0
     assert_select "a", text: "Sentry で会話を開く"
+  end
+
+  test "puts the Sentry links above the ticket workflow's result" do
+    run = create_ticket_workflow_run("verdict" => "合格", "findings" => [])
+    run.update!(trace_ids: TRACE_IDS)
+
+    with_env(SENTRY) { get run_path(run) }
+
+    assert_select "[data-run-result] [data-ticket-workflow]"
+    assert_before "[data-sentry-links]", "[data-run-result]"
+    assert_select "[data-sentry-links] a.btn-primary", text: "Sentry でトレースを開く"
+  end
+
+  test "puts the Sentry links above the refund's result" do
+    run = create_refund_run("approved", order_status: "refunded")
+    run.update!(trace_ids: TRACE_IDS)
+
+    with_env(SENTRY) { get run_path(run) }
+
+    assert_select "[data-run-result] [data-refund-decision]"
+    assert_before "[data-sentry-links]", "[data-run-result]"
+    assert_select "[data-sentry-links] a.btn-primary", text: "Sentry でトレースを開く"
+  end
+
+  test "puts the Sentry links above the decision, leaving 承認する the only primary action" do
+    run = create_awaiting_run
+    run.update!(trace_ids: TRACE_IDS)
+
+    with_env(SENTRY) { get run_path(run) }
+
+    assert_before "[data-sentry-links]", "[data-approval]"
+    assert_select "[data-sentry-links] a.btn-secondary", 3
+    assert_select "[data-sentry-links] a:not(.btn-secondary)", count: 0
+    assert_select ".btn-primary" do |primaries|
+      assert_equal [ "承認する" ], primaries.map { |primary| primary.text.strip }
+    end
+    assert_select "[data-approval] button.btn-secondary", text: "却下する"
+  end
+
+  test "puts the Sentry links above what failed" do
+    run = create_run(trace_ids: TRACE_IDS.first(1))
+    run.fail_with!(RubyLLM::RateLimitError.new("You exceeded your current quota"))
+
+    with_env(SENTRY) { get run_path(run) }
+
+    assert_before "[data-sentry-links]", "[data-failure]"
+  end
+
+  test "shows the Sentry links beside the status of a running run, which keeps polling" do
+    run = create_run
+
+    with_env(SENTRY) { get run_path(run) }
+
+    assert_select "[data-run-status-row] [data-run-status]", text: "実行中"
+    assert_select "[data-run-status-row]", text: /実行を指示してから \d+ 秒/
+    assert_select "*", text: /ワーカー/
+    assert_select "[data-run-status-row]", text: /ワーカー/, count: 0
+    assert_select "[data-run-status-row] [data-sentry-links] a", 1
+    assert_select "[data-sentry-links] a", text: "Sentry で会話を開く"
+    assert_select "[data-controller='poll'][data-poll-active-value='true']"
+  end
+
+  test "explains the settings the Sentry links need, in the place of the links" do
+    run = create_run.tap { |r| r.succeed!({ "answer" => "Your order ships tomorrow.", "model" => "gpt-5-nano-2025-08-07" }) }
+
+    with_env(NO_SENTRY) { get run_path(run) }
+
+    assert_select "[data-run-status-row] [data-run-status]"
+    assert_select "[data-run-status-row] [data-sentry-links]", text: /\.env.*SENTRY_ORG.*SENTRY_DSN/
+    assert_select "[data-sentry-links] a", count: 0
+    assert_before "[data-run-status]", "[data-sentry-links]"
+    assert_before "[data-sentry-links]", "[data-run-result]"
   end
 
   test "opens the demo with this input, or the demo alone" do

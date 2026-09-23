@@ -76,7 +76,8 @@ module Demos
     end
 
     # A scenario hands back its result, or the chat it stopped on for a
-    # person's approval.
+    # person's approval. What to keep of either, such as the files a result
+    # holds, is the run's to decide; the job only hands it over.
     def record(run, outcome)
       if outcome.is_a?(Chat)
         run.await_approval!(outcome)

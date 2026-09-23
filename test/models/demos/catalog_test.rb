@@ -90,6 +90,23 @@ module Demos
       assert_not_predicate scenario, :implemented?
     end
 
+    test "reads the answer aloud with OpenAI from one required text, and starts over when its job runs again" do
+      scenario = Catalog.scenario("speak_answer")
+
+      assert_equal VideoAndSpeech::SpeakAnswer, scenario.handler
+      assert_equal %w[openai], scenario.providers
+      assert_equal({ "model" => "gpt-4o-mini-tts" }, scenario.models)
+      assert_equal %w[text], scenario.inputs.map(&:name)
+      assert scenario.inputs.sole.required
+      assert_predicate scenario.inputs.sole.default, :present?
+      assert_equal "speech", scenario.result_kind
+      assert_equal true, scenario.retryable
+    end
+
+    test "keeps the product video being prepared" do
+      refute_predicate Catalog.scenario("generate_product_video"), :implemented?
+    end
+
     # Availability is judged from the providers a scenario lists, while the
     # handler reaches the provider through the model id. They must agree.
     test "lists the provider each model of an implemented scenario resolves to" do

@@ -5,6 +5,9 @@ module Demos
     include ActiveJob::TestHelper
     include ScreenHelpers
 
+    # A generated file without a format, as RubyLLM's Video and Image have none.
+    GeneratedClip = Struct.new(:to_blob, :mime_type)
+
     test "starts a run with the given input and queues its job" do
       run = Run.start(runnable_scenario, "inquiry" => "Where is my order?")
 
@@ -55,6 +58,148 @@ module Demos
 
       assert_raises(ActiveRecord::RecordInvalid) { run.fail_with!(RuntimeError.new("late")) }
       assert_predicate run.reload, :succeeded?
+    end
+
+    test "keeps a generated file as an attachment named after its key, and a reference to it in the result" do
+      run = create_run
+
+      run.succeed!({ "speech" => fake_speech(data: "mp3 bytes"), "model" => "gpt-4o-mini-tts", "characters" => 42 })
+
+      run.reload
+      assert_predicate run, :succeeded?
+      assert_not_nil run.finished_at
+      file = run.generated_files.sole
+      assert_equal "speech.mp3", file.filename.to_s
+      assert_equal "audio/mpeg", file.content_type
+      assert_equal "mp3 bytes", file.download
+      assert_equal({
+        "speech" => { "filename" => "speech.mp3", "content_type" => "audio/mpeg", "byte_size" => 9 },
+        "model" => "gpt-4o-mini-tts",
+        "characters" => 42
+      }, run.result)
+    end
+
+    test "names a generated file that has no format by its MIME type" do
+      run = create_run
+
+      run.succeed!({ "video" => GeneratedClip.new("mp4 bytes", "video/mp4") })
+
+      file = run.reload.generated_files.sole
+      assert_equal "video.mp4", file.filename.to_s
+      assert_equal "video/mp4", file.content_type
+      assert_equal({ "filename" => "video.mp4", "content_type" => "video/mp4", "byte_size" => 9 }, run.result["video"])
+    end
+
+    test "names a generated file by its key alone when Rails does not know its MIME type" do
+      run = create_run
+
+      run.succeed!({ "clip" => GeneratedClip.new("bytes", "application/x-unknown") })
+
+      file = run.reload.generated_files.sole
+      assert_equal "clip", file.filename.to_s
+      assert_equal "application/x-unknown", file.content_type
+    end
+
+    test "keeps every generated file of a result" do
+      run = create_run
+
+      run.succeed!({ "speech" => fake_speech(data: "mp3"), "video" => GeneratedClip.new("mp4 bytes", "video/mp4") })
+
+      run.reload
+      assert_equal %w[speech.mp3 video.mp4], run.generated_files.map { |file| file.filename.to_s }.sort
+      assert_equal({ "filename" => "speech.mp3", "content_type" => "audio/mpeg", "byte_size" => 3 }, run.result["speech"])
+      assert_equal({ "filename" => "video.mp4", "content_type" => "video/mp4", "byte_size" => 9 }, run.result["video"])
+    end
+
+    test "keeps no attachment for a result without generated files" do
+      run = create_run
+
+      run.succeed!({ "answer" => "Hello", "model" => "gpt-5-nano" })
+
+      assert_equal({ "answer" => "Hello", "model" => "gpt-5-nano" }, run.reload.result)
+      assert_empty run.generated_files
+    end
+
+    test "refuses to record success on a finished run before storing anything" do
+      %w[succeeded failed cancelled].each do |status|
+        run = create_run(status: status, result: { "answer" => "before" }, finished_at: 1.minute.ago)
+        uploads = 0
+
+        with_storage_upload(->(upload, *args, **options) { uploads += 1; upload.call(*args, **options) }) do
+          assert_no_difference([ -> { ActiveStorage::Blob.count }, -> { ActiveStorage::Attachment.count } ]) do
+            assert_raises(ActiveRecord::RecordInvalid, status) { run.succeed!({ "speech" => fake_speech, "answer" => "after" }) }
+          end
+        end
+
+        assert_equal 0, uploads, status
+        run.reload
+        assert_equal status, run.status
+        assert_equal({ "answer" => "before" }, run.result, status)
+        assert_empty run.generated_files, status
+      end
+    end
+
+    test "keeps neither the attachments nor the result when storing a generated file fails part way" do
+      run = create_run
+      uploads = 0
+      failing_second = lambda do |upload, *args, **options|
+        uploads += 1
+        raise IOError, "disk full" if uploads == 2
+
+        upload.call(*args, **options)
+      end
+
+      with_storage_upload(failing_second) do
+        assert_no_difference([ -> { ActiveStorage::Blob.count }, -> { ActiveStorage::Attachment.count } ]) do
+          error = assert_raises(IOError) do
+            run.succeed!({ "speech" => fake_speech, "video" => GeneratedClip.new("mp4 bytes", "video/mp4") })
+          end
+          assert_equal "disk full", error.message
+        end
+      end
+
+      assert_equal 2, uploads
+      run.reload
+      assert_predicate run, :running?
+      assert_nil run.result
+      assert_nil run.finished_at
+      assert_empty run.generated_files
+    end
+
+    # The job records the failure on the same object right after.
+    test "leaves nothing of a result for the next save when saving it fails after the files were stored" do
+      run = create_run
+      failing = true
+      run.define_singleton_method(:save!) do |**options|
+        next super(**options) unless failing
+
+        failing = false
+        raise ActiveRecord::RecordNotSaved.new("Failed to save the record", self)
+      end
+
+      assert_no_difference([ -> { ActiveStorage::Blob.count }, -> { ActiveStorage::Attachment.count } ]) do
+        assert_raises(ActiveRecord::RecordNotSaved) { run.succeed!({ "speech" => fake_speech, "answer" => "after" }) }
+        run.fail_with!(ActiveRecord::RecordNotSaved.new("Failed to save the record"))
+      end
+
+      run.reload
+      assert_predicate run, :failed?
+      assert_nil run.result
+      assert_empty run.generated_files
+    end
+
+    test "refuses to record success on a run waiting for approval before storing anything" do
+      run = create_awaiting_run
+      uploads = 0
+
+      with_storage_upload(->(upload, *args, **options) { uploads += 1; upload.call(*args, **options) }) do
+        assert_raises(ActiveRecord::RecordInvalid) { run.succeed!({ "speech" => fake_speech }) }
+      end
+
+      assert_equal 0, uploads
+      assert_predicate run.reload, :awaiting_approval?
+      assert_nil run.result
+      assert_empty run.generated_files
     end
 
     test "allows the transitions a run can make" do

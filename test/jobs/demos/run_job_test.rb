@@ -91,6 +91,27 @@ module Demos
       assert_equal "NoMethodError", @run.failure["kind"]
     end
 
+    test "fails and reports a run whose generated files could not all be stored, keeping none of them" do
+      FakeHandler.outcome = { "speech" => fake_speech, "slow_speech" => fake_speech }
+      uploads = 0
+      failing_second = lambda do |upload, *args, **options|
+        uploads += 1
+        raise IOError, "disk full" if uploads == 2
+
+        upload.call(*args, **options)
+      end
+
+      with_storage_upload(failing_second) do
+        assert_error_reported(IOError) { perform }
+      end
+
+      assert_predicate @run.reload, :failed?
+      assert_equal "IOError", @run.failure["kind"]
+      assert_equal "disk full", @run.failure["message"]
+      assert_nil @run.result
+      assert_empty @run.generated_files
+    end
+
     test "fails a ticket workflow run whose step fails, and asks nothing after that step" do
       run = Run.create!(scenario_key: "run_ticket_workflow", input: { "ticket" => "電気ケトルの電源が入りません。" })
       chat = ScriptedChat.new(

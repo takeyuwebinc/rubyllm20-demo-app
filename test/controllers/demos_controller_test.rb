@@ -145,6 +145,37 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  test "shows reading the answer aloud as runnable with its explanation, sources, code, and default answer" do
+    with_openai_key("sk-test") { get root_path }
+
+    assert_select "[data-demo='video-and-speech'] [data-availability]", text: "実行できる"
+
+    with_openai_key("sk-test") { get demo_path("video-and-speech") }
+
+    assert_select "h2", text: "役立つケース"
+    assert_select "*", text: /自動音声応答の文面を読み上げたい/
+    assert_select "*", text: /2,000 トークンの入力の上限/
+    assert_select "*", text: /2026-09-22 に実際の API で確かめた/
+    assert_select "*", text: /AI が生成した音声であることを聞き手に明示する/
+    assert_select "h2", text: "使わない場合に困ること"
+    assert_select "*", text: /書き直しになる/
+    assert_select "a[href='https://rubyllm.com/text-to-speech/'][target='_blank']"
+    assert_select "a[href='https://rubyllm.com/whats-new-in-2-0/#video-and-speech-generation'][target='_blank']"
+    assert_select "a[href='https://rubyllm.com/video-generation/'][target='_blank']"
+    assert_select "a[href='https://developers.openai.com/api/docs/guides/text-to-speech'][target='_blank']"
+    assert_select "a[href='https://developers.openai.com/api/reference/resources/audio/subresources/speech/methods/create'][target='_blank']"
+    assert_select "#speak_answer" do
+      assert_select "pre code", text: /RubyLLM\.speak/
+      assert_select "pre code", text: /instructions:/
+      assert_select "textarea[name='run[input][text]']", text: /A-10234/
+      assert_select "input[type=submit][value='実行する']:not([disabled])"
+    end
+    assert_select "#generate_product_video" do
+      assert_select "*", text: /準備中/
+      assert_select "input[type=submit]", count: 0
+    end
+  end
+
   test "keeps the web search from running without OpenAI settings" do
     with_openai_key(nil) { get root_path }
 
@@ -154,6 +185,17 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
 
     assert_select "#search_web [data-availability]", text: "設定値が足りない（OpenAI）"
     assert_select "#search_web input[type=submit][value='実行する'][disabled]"
+  end
+
+  test "keeps reading the answer aloud from running without OpenAI settings" do
+    with_openai_key(nil) { get root_path }
+
+    assert_select "[data-demo='video-and-speech'] [data-availability]", text: "設定値が足りない（OpenAI）"
+
+    with_openai_key(nil) { get demo_path("video-and-speech") }
+
+    assert_select "#speak_answer [data-availability]", text: "設定値が足りない（OpenAI）"
+    assert_select "#speak_answer input[type=submit][value='実行する'][disabled]"
   end
 
   test "shows a scenario being prepared without code or input" do
