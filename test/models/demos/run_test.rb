@@ -255,6 +255,92 @@ module Demos
       assert_predicate awaiting.reload, :awaiting_approval?
     end
 
+    test "queues again the job of a run a dead worker left waiting on the provider, and keeps it running" do
+      waiting = create_run(remote_job_id: "video-1")
+
+      Run.fail_abandoned!([ waiting.id ], message: "Process pid=1 exited unexpectedly")
+
+      waiting.reload
+      assert_predicate waiting, :running?
+      assert_nil waiting.failure
+      assert_nil waiting.finished_at
+      assert_equal "video-1", waiting.remote_job_id
+      assert_enqueued_with(job: RunJob, args: [ waiting ])
+    end
+
+    test "fails or queues again each run a dead worker left, by whether it waits on the provider" do
+      waiting = create_run(remote_job_id: "video-1")
+      abandoned = create_run
+      finished = create_run(remote_job_id: "video-2").tap { |run| run.succeed!({ "answer" => "done" }) }
+
+      Run.fail_abandoned!([ waiting.id, abandoned.id, finished.id ])
+
+      assert_predicate waiting.reload, :running?
+      assert_predicate abandoned.reload, :failed?
+      assert_equal "ワーカーの異常終了", abandoned.failure["kind"]
+      assert_predicate finished.reload, :succeeded?
+      assert_enqueued_jobs 1
+      assert_enqueued_with(job: RunJob, args: [ waiting ])
+    end
+
+    test "does nothing when a dead worker left no job" do
+      running = create_run
+
+      Run.fail_abandoned!([])
+
+      assert_predicate running.reload, :running?
+      assert_no_enqueued_jobs
+    end
+
+    test "keeps the id of the work left with the provider, and nothing else changes" do
+      started_at = 1.minute.ago.change(usec: 0)
+      run = create_run(started_at: started_at)
+
+      run.record_remote_job_id!("video-1")
+
+      run.reload
+      assert_equal "video-1", run.remote_job_id
+      assert_predicate run, :running?
+      assert_equal started_at, run.started_at
+      assert_nil run.result
+      assert_nil run.finished_at
+    end
+
+    test "refuses a blank id of the work left with the provider" do
+      run = create_run
+
+      [ nil, "", "  " ].each do |id|
+        assert_raises(ArgumentError, id.inspect) { run.record_remote_job_id!(id) }
+      end
+
+      run.reload
+      assert_nil run.remote_job_id
+      assert_predicate run, :running?
+    end
+
+    test "refuses to keep another id for a run that already keeps one" do
+      run = create_run(remote_job_id: "video-1")
+
+      assert_raises(ActiveRecord::RecordInvalid) { run.record_remote_job_id!("video-2") }
+
+      assert_equal "video-1", run.reload.remote_job_id
+    end
+
+    test "refuses to keep an id for a finished run or a run waiting for approval" do
+      runs = %w[succeeded failed cancelled].map { |status| create_run(status: status, finished_at: 1.minute.ago) }
+      runs << create_awaiting_run
+
+      runs.each do |run|
+        status = run.status
+
+        assert_raises(ActiveRecord::RecordInvalid, status) { run.record_remote_job_id!("video-1") }
+
+        run.reload
+        assert_nil run.remote_job_id, status
+        assert_equal status, run.status
+      end
+    end
+
     test "lists the runs of a demo, newest first" do
       older = create_run(scenario_key: "answer_inquiry", created_at: 2.minutes.ago)
       newer = create_run(scenario_key: "answer_inquiry", created_at: 1.minute.ago)

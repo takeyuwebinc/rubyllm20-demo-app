@@ -31,6 +31,17 @@ module Runs
       assert_select "[data-approval] button[type=submit]", text: "承認する"
     end
 
+    # The job keeps the id right after leaving the work with the provider,
+    # so the next poll is what shows it.
+    test "returns the id of the work a running run left with the provider" do
+      run = create_run(remote_job_id: "video-1")
+
+      get run_status_path(run)
+
+      assert_select "[data-run-status]", text: "実行中"
+      assert_select "[data-remote-job-id] code", text: "video-1"
+    end
+
     test "returns the Sentry links above the result" do
       run = create_run(trace_ids: %w[11111111111111111111111111111111])
       run.succeed!({ "answer" => "Your order ships tomorrow.", "model" => "gpt-5-nano" })

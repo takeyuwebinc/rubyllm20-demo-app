@@ -15,6 +15,30 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-run-status]", text: "実行中"
     assert_select "[data-controller='poll'][data-poll-active-value='true'][data-poll-url-value=?]", run_status_path(run)
     assert_select "*", text: /ワーカー/
+    assert_select "[data-remote-job-id]", count: 0
+  end
+
+  test "shows, below the status row, the id of the work a running run left with the provider, and keeps polling" do
+    run = create_run(remote_job_id: "0eb6910f-a353-4699-9d1e-6a4f7a5b39e2")
+
+    get run_path(run)
+
+    assert_select "[data-remote-job-id]", text: /プロバイダー側の処理の ID/ do
+      assert_select "code", text: "0eb6910f-a353-4699-9d1e-6a4f7a5b39e2"
+    end
+    assert_before "[data-run-status-row]", "[data-remote-job-id]"
+    assert_select "[data-run-status-row] [data-remote-job-id]", count: 0
+    assert_select "[data-controller='poll'][data-poll-active-value='true']"
+  end
+
+  test "keeps showing the id of the work left with the provider once the run has ended" do
+    run = create_run(remote_job_id: "0eb6910f-a353-4699-9d1e-6a4f7a5b39e2")
+    run.succeed!({ "answer" => "done" })
+
+    get run_path(run)
+
+    assert_select "[data-remote-job-id] code", text: "0eb6910f-a353-4699-9d1e-6a4f7a5b39e2"
+    assert_select "[data-controller='poll'][data-poll-active-value='false']"
   end
 
   test "shows the answer and the model that gave it" do

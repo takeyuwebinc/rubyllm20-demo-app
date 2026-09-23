@@ -31,6 +31,13 @@
         <p data-sentry-links class="text-sm text-gray-500">Sentry へのリンクには、<code>.env</code> の <code>SENTRY_ORG</code> と <code>SENTRY_DSN</code> が要る。</p>
       <% end %>
     </div>
+    <%# Shown for as long as the run keeps the id, finished or not: it says the provider holds the work, and gives the id
+        to open that work again from a console. %>
+    <% if run.remote_job_id %>
+      <p data-remote-job-id class="mt-2 text-sm text-gray-600">
+        プロバイダー側の処理の ID: <code class="rounded bg-gray-100 px-1 py-0.5 break-all"><%= run.remote_job_id %></code>
+      </p>
+    <% end %>
     <% if run.running? %>
       <p class="mt-2 max-w-prose text-sm text-gray-500">
         進まない場合は、ジョブのワーカーが動いているかを確かめる。<code>bin/dev</code> で起動すると、Web のサーバーと一緒に動く。

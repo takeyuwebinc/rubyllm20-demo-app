@@ -74,6 +74,14 @@ module Demos
       handler.resume(chat)
     end
 
+    # Waits for the work the handler left with the provider, given the id
+    # the run keeps, with each model as a keyword as perform has them.
+    # Returns as perform does. Only a handler that leaves work with the
+    # provider has this.
+    def resume_remote_job(id)
+      handler.resume(id, **models.symbolize_keys)
+    end
+
     private
 
     # Only the names of the required settings are public in RubyLLM 2.0.0;

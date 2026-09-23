@@ -66,8 +66,21 @@ module Demos
       # Solid Queue does not run a dead worker's jobs again, so their runs
       # would otherwise stay running forever. A run waiting for approval has
       # no job, so it is never among them.
+      #
+      # A run that keeps the id of work left with the provider is queued
+      # again rather than failed: the work goes on at the provider, and the
+      # job waits for it from the id, which only reads its state and costs
+      # nothing. So a result that finished while the app was down still
+      # reaches the history. Waiting cannot kill a worker, so there is no
+      # limit on how often this repeats. Any other run fails.
       def fail_abandoned!(run_ids, message: nil)
-        running.where(id: run_ids).find_each { |run| run.fail_as!(FailureKinds::WORKER_LOST, message:) }
+        running.where(id: run_ids).find_each do |run|
+          if run.remote_job_id
+            RunJob.perform_later(run)
+          else
+            run.fail_as!(FailureKinds::WORKER_LOST, message:)
+          end
+        end
       end
 
       private
@@ -193,6 +206,23 @@ module Demos
       end
       update!(status: :running, approval_requests: requests)
       RunJob.perform_later(self)
+    end
+
+    # Keeps the id of the work a scenario left with the provider, such as a
+    # video being generated, so that a job that runs again waits for that
+    # work instead of leaving it, and paying for it, once more. The status
+    # stays running: that the provider is still at work shows in the id
+    # being kept. Only a running run without an id takes one.
+    def record_remote_job_id!(id)
+      raise ArgumentError, "The id of the work left with the provider is blank" if id.blank?
+      # The status does not change, so the transition validation does not
+      # run and cannot refuse this.
+      unless running? && remote_job_id.nil?
+        errors.add(:remote_job_id, :not_recordable, message: "は #{status} の実行、または控え済みの実行には控えられない")
+        raise ActiveRecord::RecordInvalid, self
+      end
+
+      update!(remote_job_id: id)
     end
 
     def add_trace_id!(trace_id)

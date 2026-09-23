@@ -19,8 +19,42 @@ module Demos
       end
     end
 
+    # Stands in for a handler that leaves work with the provider.
+    class WaitingHandler
+      class << self
+        attr_accessor :calls
+
+        def resume(id, **models)
+          (self.calls ||= []) << [ id, models ]
+          { "video" => "done" }
+        end
+      end
+    end
+
     setup do
       @config = RubyLLM::Configuration.new
+    end
+
+    test "hands the id of the work left with the provider, and the models, to its handler to wait for" do
+      WaitingHandler.calls = []
+      scenario = scenario(handler_name: WaitingHandler.name, models: { "model" => "grok-imagine-video-1.5" })
+
+      assert_equal({ "video" => "done" }, scenario.resume_remote_job("video-1"))
+      assert_equal [ [ "video-1", { model: "grok-imagine-video-1.5" } ] ], WaitingHandler.calls
+    end
+
+    test "hands only the id when the scenario names no model" do
+      WaitingHandler.calls = []
+
+      scenario(handler_name: WaitingHandler.name, models: {}).resume_remote_job("research-1")
+
+      assert_equal [ [ "research-1", {} ] ], WaitingHandler.calls
+    end
+
+    test "cannot wait for kept work with a handler that leaves none" do
+      scenario = scenario(handler_name: "ResponsesApi::AnswerInquiry")
+
+      assert_raises(NoMethodError) { scenario.resume_remote_job("video-1") }
     end
 
     test "hands a decision and a resumption to its handler" do
