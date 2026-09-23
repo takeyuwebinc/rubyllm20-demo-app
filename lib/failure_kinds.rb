@@ -134,7 +134,8 @@ module FailureKinds
   end
 
   # Whether the provider answered that it has no such work, in +error+ or
-  # in the error it wraps.
+  # in the error it wraps. RubyLLM raises a 404 as a plain RubyLLM::Error,
+  # so it is told by the response's status rather than by a row.
   def self.not_found?(error)
     [ error, error.cause ].any? { |raised| raised.is_a?(RubyLLM::Error) && raised.response&.status == 404 }
   end

@@ -182,6 +182,10 @@ module Demos
     # The ID of work the scenario left with the provider, kept so that a job
     # that runs again waits for the same work instead of starting another.
     # Only a running run keeps one, and never a second one.
+    #
+    # The ID alone is enough, as the scenario names the provider. It is
+    # remote_job_id rather than provider_job_id, which is already the name
+    # of Active Job's own id for the queued job.
     def keep_remote_job_id!(id)
       refuse_unless_running!
       raise ArgumentError, "A remote job ID must not be blank" if id.blank?

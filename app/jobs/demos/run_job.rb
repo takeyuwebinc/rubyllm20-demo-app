@@ -76,6 +76,11 @@ module Demos
     # its ID is kept before the wait, so that a job that runs again waits for
     # the same work. Until the ID is kept, a job put back has nothing to
     # continue from, and the work it started goes unused.
+    #
+    # The wait runs in this job, so a run that is not interrupted is one
+    # trace with each poll a request in it; a job queued for every poll
+    # would split the run into a trace per poll. The wait holds one of the
+    # worker's threads for as long as the work takes.
     def start(run, scenario)
       started = scenario.perform(run.input)
       return started unless remote_work?(started)

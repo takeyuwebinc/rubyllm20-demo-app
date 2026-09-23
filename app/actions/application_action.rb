@@ -21,6 +21,8 @@
 #
 # An action that leaves work with the provider, such as a research job,
 # returns that work as RubyLLM returned it: anything with id and pending?.
+# It keeps no record of the ID itself, so that it stays plain RubyLLM code
+# with nothing of the run in it.
 # Its class then also has .resume(id), which waits for the work by its ID
 # and returns the result. The job keeps the ID with the run as soon as the
 # work is returned, and then calls .resume, so a job that runs again waits
