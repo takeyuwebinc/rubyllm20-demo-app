@@ -106,6 +106,43 @@ module Demos
       assert_select "#search_web [data-input-error='question']", text: "入力してください"
     end
 
+    test "records a code execution run with the default order data and request, and queues it" do
+      scenario = Demos::Catalog.scenario("run_code")
+      defaults = scenario.input_values({})
+
+      assert_difference(-> { Run.count }) do
+        with_openai_key("sk-test") do
+          post demo_runs_path("provider-tools"), params: { run: { scenario_key: "run_code", input: defaults } }
+        end
+      end
+
+      run = Run.last
+      assert_redirected_to run_path(run)
+      assert_equal "run_code", run.scenario_key
+      assert_equal defaults, run.input
+      assert_includes run.input["orders"], "E-50101"
+      assert_enqueued_with(job: RunJob, args: [ run ])
+    end
+
+    test "refuses blank order data or a blank request for the code execution, under each blank input" do
+      [
+        [ { orders: " \n", request: "合計を求めてください" }, %w[orders] ],
+        [ { orders: "注文番号,金額\nE-1,100", request: "" }, %w[request] ],
+        [ { orders: "", request: " " }, %w[orders request] ]
+      ].each do |input, blank|
+        assert_no_difference(-> { Run.count }) do
+          with_openai_key("sk-test") do
+            post demo_runs_path("provider-tools"), params: { run: { scenario_key: "run_code", input: input } }
+          end
+        end
+
+        assert_response :unprocessable_entity
+        %w[orders request].each do |name|
+          assert_select "#run_code [data-input-error='#{name}']", { text: "入力してください", count: blank.include?(name) ? 1 : 0 }, name
+        end
+      end
+    end
+
     test "records a speech run with the answer to read aloud, and queues it" do
       assert_difference(-> { Run.count }) do
         with_openai_key("sk-test") do

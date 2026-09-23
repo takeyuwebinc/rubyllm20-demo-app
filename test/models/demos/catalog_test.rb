@@ -83,11 +83,18 @@ module Demos
       assert_equal "web_search_answer", scenario.result_kind
     end
 
-    test "keeps the code execution of Provider Tools being prepared" do
+    test "starts the code execution over when its job runs again, from order data and a request, on OpenAI" do
       scenario = Catalog.scenario("run_code")
 
       assert_equal "provider-tools", scenario.demo.key
-      assert_not_predicate scenario, :implemented?
+      assert_equal ProviderTools::AnswerWithCodeExecution, scenario.handler
+      assert_equal %w[openai], scenario.providers
+      assert_equal({ "model" => "gpt-5-nano" }, scenario.models)
+      assert_equal true, scenario.retryable
+      assert_equal %w[orders request], scenario.inputs.map(&:name)
+      assert scenario.inputs.all?(&:required)
+      assert scenario.inputs.all? { |input| input.default.present? }
+      assert_equal "code_execution_answer", scenario.result_kind
     end
 
     test "reads the answer aloud with OpenAI from one required text, and starts over when its job runs again" do
