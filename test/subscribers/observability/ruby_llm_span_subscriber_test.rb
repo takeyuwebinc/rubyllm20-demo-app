@@ -145,6 +145,52 @@ module Observability
       ] } ], output
     end
 
+    test "follows each provider step that has a list of results with those results as its response" do
+      answer = RubyLLM::Message.new(
+        role: :assistant, content: "合計は 12,800 円です。", model: "gpt-5-nano",
+        server_tool_calls: [
+          RubyLLM::ServerToolCall.new(type: "code_interpreter_call", id: "ci_1", input: "print(1 + 1)",
+            result: [ { "type" => "logs", "logs" => "2\n" } ], raw: {}),
+          RubyLLM::ServerToolCall.new(type: "code_interpreter_call", id: "ci_2", input: "print(sum([3, 4]))",
+            result: [ { "type" => "logs", "logs" => "7\n" }, { "type" => "image", "url" => "https://example.com/plot.png" } ], raw: {})
+        ]
+      )
+
+      instrument("chat.ruby_llm", chat_payload) { |payload| complete(payload, response: answer) }
+
+      output = JSON.parse(span("chat gpt-5-nano").attributes["gen_ai.output.messages"])
+      assert_equal [
+        { "type" => "text", "content" => "合計は 12,800 円です。" },
+        { "type" => "tool_call", "id" => "ci_1", "name" => "code_interpreter_call", "arguments" => "print(1 + 1)" },
+        { "type" => "tool_call_response", "id" => "ci_1", "result" => [ { "type" => "logs", "logs" => "2\n" } ] },
+        { "type" => "tool_call", "id" => "ci_2", "name" => "code_interpreter_call", "arguments" => "print(sum([3, 4]))" },
+        { "type" => "tool_call_response", "id" => "ci_2", "result" => [ { "type" => "logs", "logs" => "7\n" }, { "type" => "image", "url" => "https://example.com/plot.png" } ] }
+      ], output.sole["parts"]
+    end
+
+    # A result that is not a list, such as encrypted content, is opaque and
+    # stays out; an empty list is still the step's result.
+    test "gives a provider step a response only when its result is a list, even an empty one" do
+      answer = RubyLLM::Message.new(
+        role: :assistant, content: "", model: "gpt-5-nano",
+        server_tool_calls: [
+          RubyLLM::ServerToolCall.new(type: "code_interpreter_call", id: "ci_1", input: "print(1)", result: nil, raw: {}),
+          RubyLLM::ServerToolCall.new(type: "compaction", id: "cmp_1", result: "gAAAAABencrypted", raw: {}),
+          { type: "code_interpreter_call", id: "ci_2", input: "x = 1", result: [] }
+        ]
+      )
+
+      instrument("chat.ruby_llm", chat_payload) { |payload| complete(payload, response: answer) }
+
+      output = JSON.parse(span("chat gpt-5-nano").attributes["gen_ai.output.messages"])
+      assert_equal [
+        { "type" => "tool_call", "id" => "ci_1", "name" => "code_interpreter_call", "arguments" => "print(1)" },
+        { "type" => "tool_call", "id" => "cmp_1", "name" => "compaction", "arguments" => {} },
+        { "type" => "tool_call", "id" => "ci_2", "name" => "code_interpreter_call", "arguments" => "x = 1" },
+        { "type" => "tool_call_response", "id" => "ci_2", "result" => [] }
+      ], output.sole["parts"]
+    end
+
     test "captures a response without provider steps as before, whether it has none or cannot have any" do
       [
         RubyLLM::Message.new(role: :assistant, content: "pong", model: "gpt-5-nano", server_tool_calls: []),
@@ -514,6 +560,122 @@ module Observability
       assert_equal 3, span("tokenization grok-4.3").attributes["ruby_llm.tokenization.count"]
     end
 
+    test "traces a research job submission as a plain span, with the agent, the job, and the prompt as the input" do
+      instrument("research_job.ruby_llm", research_payload) { |payload| submit_research(payload) }
+
+      attributes = span("research_job").attributes
+
+      assert_equal "research_job", attributes["ruby_llm.operation"]
+      assert_equal "vertexai", attributes["gen_ai.provider.name"]
+      assert_equal "deep-research-preview-04-2026", attributes["ruby_llm.research.agent"]
+      assert_equal "v1_abc", attributes["ruby_llm.research.job_id"]
+      assert_equal "pending", attributes["ruby_llm.research.status"]
+      assert_equal [ { "role" => "user", "parts" => [ { "type" => "text", "content" => "日本の通信販売の返品の法制度を整理してほしい。" } ] } ],
+        JSON.parse(attributes["gen_ai.input.messages"])
+      # An operation without a GenAI name of its own carries neither the
+      # Sentry operation nor usage, as the submission reports no tokens.
+      assert_not_includes attributes.keys, "sentry.op"
+      assert_not_includes attributes.keys, "gen_ai.operation.name"
+      assert_not_includes attributes.keys, "gen_ai.request.model"
+      assert_empty attributes.keys.grep(/\Agen_ai\.(usage|cost)\./)
+      assert_not_includes attributes.keys, "gen_ai.output.messages"
+    end
+
+    test "marks a failed research job submission as failed, without a job or its status" do
+      assert_raises(RubyLLM::RateLimitError) do
+        instrument("research_job.ruby_llm", research_payload) { raise RubyLLM::RateLimitError.new("Quota exceeded for quota metric") }
+      end
+
+      research = span("research_job")
+
+      assert_equal OpenTelemetry::Trace::Status::ERROR, research.status.code
+      assert_equal "RubyLLM::RateLimitError", research.attributes["error.type"]
+      assert_match(/Quota exceeded/, research.attributes["error.message"])
+      assert_equal "deep-research-preview-04-2026", research.attributes["ruby_llm.research.agent"]
+      assert_not_includes research.attributes.keys, "ruby_llm.research.job_id"
+      assert_not_includes research.attributes.keys, "ruby_llm.research.status"
+    end
+
+    test "leaves the input out when the research prompt is empty, and still describes the job" do
+      instrument("research_job.ruby_llm", research_payload.merge(prompt: "")) { |payload| submit_research(payload) }
+
+      attributes = span("research_job").attributes
+
+      assert_not_includes attributes.keys, "gen_ai.input.messages"
+      assert_equal "deep-research-preview-04-2026", attributes["ruby_llm.research.agent"]
+      assert_equal "v1_abc", attributes["ruby_llm.research.job_id"]
+      assert_equal "pending", attributes["ruby_llm.research.status"]
+    end
+
+    test "leaves the research prompt out when content capture is off, and still describes the job" do
+      ActiveSupport::Notifications.unsubscribe(@subscription)
+      @subscription = ActiveSupport::Notifications.subscribe(/\.ruby_llm\z/, RubyLLMSpanSubscriber.new(tracer: @provider.tracer("test"), capture_content: false))
+
+      instrument("research_job.ruby_llm", research_payload) { |payload| submit_research(payload) }
+
+      attributes = span("research_job").attributes
+
+      assert_empty attributes.keys.grep(/messages/)
+      assert_equal "deep-research-preview-04-2026", attributes["ruby_llm.research.agent"]
+      assert_equal "v1_abc", attributes["ruby_llm.research.job_id"]
+      assert_equal "pending", attributes["ruby_llm.research.status"]
+    end
+
+    test "describes a submitted video job by its id and options, with the prompt as the input" do
+      instrument("video_job.ruby_llm", video_job_payload) { |payload| payload[:job_id] = "0eb6910f-a353-4699-9d1e-6a4f7a5b39e2" }
+
+      attributes = span("video_job grok-imagine-video-1.5").attributes
+
+      assert_equal "0eb6910f-a353-4699-9d1e-6a4f7a5b39e2", attributes["ruby_llm.video_job.id"]
+      assert_equal({ "duration" => 6, "resolution" => "480p", "aspect_ratio" => "16:9" }, JSON.parse(attributes["ruby_llm.video_job.options"]))
+      assert_equal [ { "role" => "user", "parts" => [ { "type" => "text", "content" => "電気ケトルの紹介動画" } ] } ],
+        JSON.parse(attributes["gen_ai.input.messages"])
+      assert_equal "video_job", attributes["ruby_llm.operation"]
+      assert_equal "xai", attributes["gen_ai.provider.name"]
+      assert_equal "grok-imagine-video-1.5", attributes["gen_ai.request.model"]
+      assert_equal "EC: 紹介動画", attributes["gen_ai.agent.name"]
+      assert_equal "run-1", attributes["gen_ai.conversation.id"]
+      assert_not_includes attributes.keys, "sentry.op"
+      assert_not_includes attributes.keys, "gen_ai.operation.name"
+      assert_not_includes attributes.keys, "gen_ai.output.messages"
+    end
+
+    test "marks a video job that failed to submit as failed, without an id" do
+      assert_raises(RubyLLM::RateLimitError) do
+        instrument("video_job.ruby_llm", video_job_payload) { raise RubyLLM::RateLimitError, "Rate limit reached" }
+      end
+
+      video_job = span("video_job grok-imagine-video-1.5")
+
+      assert_equal OpenTelemetry::Trace::Status::ERROR, video_job.status.code
+      assert_equal "RubyLLM::RateLimitError", video_job.attributes["error.type"]
+      assert_equal "Rate limit reached", video_job.attributes["error.message"]
+      assert_not_includes video_job.attributes.keys, "ruby_llm.video_job.id"
+    end
+
+    test "leaves the input out when the video prompt is empty, and still describes the job" do
+      instrument("video_job.ruby_llm", video_job_payload.merge(prompt: "")) { |payload| payload[:job_id] = "video-1" }
+
+      attributes = span("video_job grok-imagine-video-1.5").attributes
+
+      assert_not_includes attributes.keys, "gen_ai.input.messages"
+      assert_equal "video-1", attributes["ruby_llm.video_job.id"]
+      assert_includes attributes.keys, "ruby_llm.video_job.options"
+    end
+
+    test "leaves the video prompt out when content capture is off, and still describes the job" do
+      ActiveSupport::Notifications.unsubscribe(@subscription)
+      @subscription = ActiveSupport::Notifications.subscribe(/\.ruby_llm\z/, RubyLLMSpanSubscriber.new(tracer: @provider.tracer("test"), capture_content: false))
+
+      instrument("video_job.ruby_llm", video_job_payload) { |payload| payload[:job_id] = "video-1" }
+
+      attributes = span("video_job grok-imagine-video-1.5").attributes
+
+      assert_empty attributes.keys.grep(/messages/)
+      assert_equal "video-1", attributes["ruby_llm.video_job.id"]
+      assert_equal({ "duration" => 6, "resolution" => "480p", "aspect_ratio" => "16:9" }, JSON.parse(attributes["ruby_llm.video_job.options"]))
+    end
+
     test "ignores events that are not model work" do
       instrument("models.refresh.ruby_llm", remote_only: true)
 
@@ -576,8 +738,28 @@ module Observability
       }
     end
 
+    # What RubyLLM.animate_later instruments when it submits a video inside
+    # a workflow; the job id is added once the provider accepts it.
+    def video_job_payload
+      {
+        provider: "xai", provider_class: "xAI", model: "grok-imagine-video-1.5", prompt: "電気ケトルの紹介動画",
+        provider_options: { duration: 6, resolution: "480p", aspect_ratio: "16:9" }, metadata: nil,
+        workflow_name: "EC: 紹介動画", workflow_metadata: { conversation_id: "run-1" }
+      }
+    end
+
     def complete_speech(payload)
       payload.merge!(response_model: "gpt-4o-mini-tts", voice: "marin", format: "mp3", audio_bytes: 48_000)
+    end
+
+    # What RubyLLM.research_later instruments before the provider answers.
+    def research_payload
+      { provider: :vertexai, agent: "deep-research-preview-04-2026", prompt: "日本の通信販売の返品の法制度を整理してほしい。", metadata: nil }
+    end
+
+    # What it adds once the provider accepted the job.
+    def submit_research(payload)
+      payload.merge!(job_id: "v1_abc", status: :pending)
     end
 
     # What RubyLLM.tokenize instruments before the provider answers: the

@@ -44,6 +44,45 @@ module RunsHelper
     link_to text, url, target: "_blank", rel: "noopener", class: "link-quiet"
   end
 
+  # The answer with a numbered mark at the end of the span each source
+  # supports, linking to the source in the list. Marks rather than a list of
+  # the spans: Anthropic splits the answer at each claim, often in the middle
+  # of a sentence, so listing the spans would repeat the answer piece by
+  # piece. The mark shows where a claim ends as the answer is read.
+  #
+  # end_index is a count of characters into the answer as it was recorded,
+  # so the answer is split at the marks first and each piece escaped after:
+  # escaping first would turn a < into &lt; and move every mark after it.
+  # Marks at the same place keep the order of their numbers.
+  def answer_with_citation_marks(answer, citations)
+    marks = citations.each.with_index(1).filter_map do |citation, number|
+      [ citation["end_index"], number ] if citation_marked?(citation, answer)
+    end
+    offset = 0
+    pieces = marks.sort.flat_map do |position, number|
+      piece = answer[offset...position]
+      offset = position
+      [ piece, citation_mark(number) ]
+    end
+    safe_join(pieces << answer[offset..])
+  end
+
+  # Whether a source has a place for its mark in the answer. A source
+  # without one is listed with the span of the answer it supports instead.
+  def citation_marked?(citation, answer)
+    position = citation["end_index"]
+    position.is_a?(Integer) && position.between?(0, answer.length)
+  end
+
+  def citation_anchor(number)
+    "citation-#{number}"
+  end
+
+  def citation_mark(number)
+    tag.sup(link_to("[#{number}]", "##{citation_anchor(number)}", class: "text-indigo-700 no-underline hover:underline"),
+      data: { citation_mark: number })
+  end
+
   def run_status_badge(run, size: :small)
     text_size = size == :large ? "px-3 py-1 text-base" : "px-2 py-1 text-xs"
     tag.span(STATUS_LABELS.fetch(run.status), data: { run_status: run.status },

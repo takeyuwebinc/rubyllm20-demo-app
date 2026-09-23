@@ -3,9 +3,13 @@ module Demos
     "demo_"
   end
 
-  # The provider's name as RubyLLM displays it, or the slug when RubyLLM has
-  # no provider by that name.
+  # RubyLLM displays a provider by its class name, which spells xAI as XAI.
+  # These are the names the providers go by.
+  PROVIDER_NAMES = { "xai" => "xAI" }.freeze
+
+  # The provider's own name, else its name as RubyLLM displays it, or the
+  # slug when RubyLLM has no provider by that name.
   def self.provider_name(slug)
-    RubyLLM::Provider.providers[slug.to_sym]&.display_name || slug.to_s
+    PROVIDER_NAMES[slug.to_s] || RubyLLM::Provider.providers[slug.to_sym]&.display_name || slug.to_s
   end
 end

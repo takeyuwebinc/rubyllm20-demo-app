@@ -24,6 +24,15 @@
           <dd class="mt-1 whitespace-pre-wrap break-words text-sm text-gray-800"><%= value %></dd>
         </div>
       <% end %>
+      <%# The documents are not recorded with the run: these are the files the scenario hands its handler now. %>
+      <% if scenario&.documents&.any? %>
+        <div data-run-documents>
+          <dt class="text-sm text-gray-500">添付した文書</dt>
+          <% scenario.documents.each do |document| %>
+            <dd class="mt-1 text-sm"><%= document_link(document) %></dd>
+          <% end %>
+        </div>
+      <% end %>
     </dl>
   </section>
 
