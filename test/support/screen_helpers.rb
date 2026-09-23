@@ -9,6 +9,14 @@ module ScreenHelpers
     RubyLLM.config.openai_api_key = original
   end
 
+  def with_xai_key(value)
+    original = RubyLLM.config.xai_api_key
+    RubyLLM.config.xai_api_key = value
+    yield
+  ensure
+    RubyLLM.config.xai_api_key = original
+  end
+
   def with_env(values)
     originals = values.keys.to_h { |key| [ key, ENV[key] ] }
     values.each { |key, value| ENV[key] = value }
