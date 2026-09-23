@@ -27,7 +27,10 @@ module Observability
 
     # conversation_id is the one a workflow names in its own metadata. It is
     # kept for as long as the workflow is open, so that inner events can use it.
-    Entry = Struct.new(:span, :token, :conversation_id, keyword_init: true)
+    # name is the event the span describes, which for usage that no
+    # operation encloses is that usage's operation. operation tells whether
+    # the span is one of model work, and so encloses usage of its own.
+    Entry = Struct.new(:span, :token, :conversation_id, :name, :operation, keyword_init: true)
 
     def initialize(tracer:, capture_content:)
       @tracer = tracer
@@ -39,11 +42,11 @@ module Observability
       stack.push(open_entry(name, payload))
     end
 
-    def finish(name, _id, payload)
+    def finish(_name, _id, payload)
       entry = stack.pop
       return unless entry&.span
 
-      close_entry(entry, name, payload)
+      close_entry(entry, entry.name, payload)
     end
 
     private
@@ -63,15 +66,34 @@ module Observability
     # workflow's inner events still join it.
     def open_entry(name, payload)
       conversation_id = own_conversation_id(payload) if name == "workflow.ruby_llm"
+      name = described_event(name, payload)
+      operation = operation?(name)
       span_name = span_name_for(name, payload)
-      return Entry.new(conversation_id:) unless span_name
+      return Entry.new(conversation_id:, name:, operation:) unless span_name
 
       span = @tracer.start_span(span_name, kind: name == "request.ruby_llm" ? :client : :internal)
       token = OpenTelemetry::Context.attach(OpenTelemetry::Trace.context_with_span(span))
-      Entry.new(span:, token:, conversation_id:)
+      Entry.new(span:, token:, conversation_id:, name:, operation:)
     rescue StandardError => error
       report(error)
-      Entry.new(conversation_id:)
+      Entry.new(conversation_id:, name:, operation:)
+    end
+
+    # RubyLLM reports usage inside the operation that incurred it, except
+    # where no operation ran: a batch's answers are collected from a file
+    # the provider wrote, and each comes with its usage alone. That usage
+    # is then described as its operation, such as a chat, so the backend
+    # counts its tokens and cost as model calls. Without a block, the span
+    # lasts no time, and the event carries no prompt or answer.
+    def described_event(name, payload)
+      return name unless name == "usage.ruby_llm" && stack.none?(&:operation)
+
+      operation_event = "#{payload[:operation]}.ruby_llm"
+      operation?(operation_event) ? operation_event : name
+    end
+
+    def operation?(name)
+      GEN_AI_OPERATIONS.key?(name) || OTHER_OPERATIONS.key?(name)
     end
 
     def close_entry(entry, name, payload)
@@ -138,7 +160,17 @@ module Observability
       attributes.merge!(usage_attributes(payload[:tokens], payload[:cost]))
       attributes.merge!(chat_attributes(payload)) if name == "chat.ruby_llm"
       attributes.merge!(speech_attributes(payload)) if name == "speech.ruby_llm"
+      attributes.merge!(batch_attributes(payload)) if name == "batch.ruby_llm"
       attributes
+    end
+
+    # The id is set once the provider accepted the batch, so a submission
+    # that failed has none.
+    def batch_attributes(payload)
+      {
+        "ruby_llm.batch.id" => payload[:batch_id]&.to_s,
+        "ruby_llm.batch.requests" => payload[:requests]&.to_i
+      }
     end
 
     # The voice and format are the ones the provider used once it answered,
