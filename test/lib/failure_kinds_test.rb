@@ -223,6 +223,27 @@ class FailureKindsTest < ActiveSupport::TestCase
     assert_match "もう一度実行", FailureKinds::INTERRUPTED.hint
   end
 
+  test "describes work that the provider ended without finishing it" do
+    assert_equal "プロバイダー側の処理の失敗", FailureKinds::REMOTE_JOB_FAILED.name
+    assert_match "24 時間以内に処理されなかった", FailureKinds::REMOTE_JOB_FAILED.hint
+    assert_match "完了した分は課金され", FailureKinds::REMOTE_JOB_FAILED.hint
+  end
+
+  test "describes work that was cancelled at the provider" do
+    assert_equal "プロバイダー側の処理の取り消し", FailureKinds::REMOTE_JOB_CANCELLED.name
+    assert_match "取り消された", FailureKinds::REMOTE_JOB_CANCELLED.hint
+    assert_match "完了した分は結果に残る", FailureKinds::REMOTE_JOB_CANCELLED.hint
+  end
+
+  test "keeps the kinds for work ended at the provider out of the table of errors" do
+    assert_not_includes FailureKinds::TABLE.values, FailureKinds::REMOTE_JOB_FAILED
+    assert_not_includes FailureKinds::TABLE.values, FailureKinds::REMOTE_JOB_CANCELLED
+    assert_equal "レート制限", FailureKinds.for(RubyLLM::RateLimitError.new).name
+    assert_equal "プロバイダーのエラー", FailureKinds.for(RubyLLM::Error.new("expired")).name
+    assert FailureKinds.provider_call?(RubyLLM::Error.new("expired"))
+    refute FailureKinds.provider_call?(ArgumentError.new)
+  end
+
   private
 
   # Only the job's state is read from an error, so a stand-in answers for it.

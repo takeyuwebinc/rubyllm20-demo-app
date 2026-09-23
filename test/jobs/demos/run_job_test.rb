@@ -5,7 +5,7 @@ module Demos
     # Stands in for a scenario handler so that no provider is called.
     class FakeHandler
       class << self
-        attr_accessor :calls, :outcome, :resumed, :resumed_models, :resume_outcome
+        attr_accessor :calls, :outcome, :resumed, :resumed_models, :resume_outcome, :traced
 
         def perform(**arguments)
           calls << arguments
@@ -17,7 +17,32 @@ module Demos
         def resume(chat_or_id, **models)
           resumed << chat_or_id
           resumed_models << models
+          traced << [ :resume, in_span? ]
           resume_outcome.respond_to?(:call) ? resume_outcome.call : resume_outcome
+        end
+
+        def in_span?
+          OpenTelemetry::Trace.current_span.context.valid?
+        end
+      end
+    end
+
+    # Stands in for a handler that leaves work the job checks on rather than
+    # waits for, such as a batch: it also has .check, and its .resume
+    # collects the ended work by its id alone. It runs FakeHandler's script
+    # and records to it.
+    class CheckingHandler
+      class << self
+        attr_accessor :checked, :check_outcome
+
+        def perform(**arguments) = FakeHandler.perform(**arguments)
+
+        def resume(id) = FakeHandler.resume(id)
+
+        def check(id)
+          checked << id
+          FakeHandler.traced << [ :check, FakeHandler.in_span? ]
+          check_outcome.respond_to?(:call) ? check_outcome.call : check_outcome
         end
       end
     end
@@ -30,8 +55,9 @@ module Demos
     end
 
     # Work left with the provider, as RubyLLM's VideoJob and ResearchJob
-    # stand for it: an id and whether it is still pending.
+    # stand for it: an id, a status, and whether it is still pending.
     RemoteJob = Data.define(:id) do
+      def status = :pending
       def pending? = true
     end
 
@@ -69,8 +95,12 @@ module Demos
     end
 
     include ActiveJob::TestHelper
+    include ActiveJob::TestHelper
     include ScreenHelpers
     include ChatHelpers
+    include BatchHelpers
+
+    RESULT = { "tickets" => [ { "text" => "届かない", "status" => "succeeded", "category" => "配送", "reason" => "未着のため" } ] }.freeze
 
     setup do
       FakeHandler.calls = []
@@ -78,6 +108,9 @@ module Demos
       FakeHandler.resumed = []
       FakeHandler.resumed_models = []
       FakeHandler.resume_outcome = { "answer" => "Refunded." }
+      CheckingHandler.checked = []
+      CheckingHandler.check_outcome = nil
+      FakeHandler.traced = []
       @run = Run.create!(scenario_key: "answer_inquiry", input: { "inquiry" => "Where is my order?" })
     end
 
@@ -111,7 +144,7 @@ module Demos
       assert_equal [ { model: "gpt-5-nano" } ], FakeHandler.resumed_models
       assert_predicate @run, :succeeded?
       assert_equal({ "answer" => "A video of the kettle." }, @run.result)
-      assert_equal [ workflow_span.hex_trace_id ], @run.trace_ids
+      assert_equal [ workflow_span.hex_trace_id ], @run.traces.map(&:id)
     end
 
     test "records a failure while waiting for the work left with the provider, and keeps its id" do
@@ -152,7 +185,7 @@ module Demos
       assert_equal started_at, @run.started_at
       assert_predicate @run, :succeeded?
       assert_equal({ "answer" => "Refunded." }, @run.result)
-      assert_equal [ "11111111111111111111111111111111", workflow_span.hex_trace_id ], @run.trace_ids
+      assert_equal [ "11111111111111111111111111111111", workflow_span.hex_trace_id ], @run.traces.map(&:id)
     end
 
     test "waits for the kept work even for a scenario that may start over" do
@@ -427,7 +460,7 @@ module Demos
       assert_predicate @run, :succeeded?
       assert_equal({ "report" => "調査の結果" }, @run.result)
       assert_equal "interactions/abc", @run.remote_job_id
-      assert_equal [ workflow_span.hex_trace_id ], @run.trace_ids
+      assert_equal [ workflow_span.hex_trace_id ], @run.traces.map(&:id)
     end
 
     test "waits for the work kept at the provider when the job runs again, instead of starting over" do
@@ -630,7 +663,7 @@ module Demos
       workflow_span = with_tracing { perform }
 
       assert_equal @run.conversation_id, workflow_span.attributes["gen_ai.conversation.id"]
-      assert_equal [ workflow_span.hex_trace_id ], @run.reload.trace_ids
+      assert_equal [ workflow_span.hex_trace_id ], @run.reload.traces.map(&:id)
     end
 
     test "records the trace of a run that stopped for approval" do
@@ -641,13 +674,217 @@ module Demos
       workflow_span = with_tracing { perform(retryable: false) }
 
       assert_predicate @run.reload, :awaiting_approval?
-      assert_equal [ workflow_span.hex_trace_id ], @run.trace_ids
+      assert_equal [ workflow_span.hex_trace_id ], @run.traces.map(&:id)
     end
 
     test "records no trace id when tracing is off" do
       perform
 
       assert_equal [], @run.reload.trace_ids
+    end
+
+    test "fails a submission that failed, and neither keeps work nor checks on any" do
+      FakeHandler.outcome = -> { raise RubyLLM::BadRequestError, "Invalid file format" }
+
+      assert_no_error_reported { perform(retryable: false, handler: CheckingHandler) }
+
+      assert_predicate @run.reload, :failed?
+      assert_equal "不正なリクエスト", @run.failure["kind"]
+      assert_nil @run.remote_job
+      assert_no_enqueued_jobs
+    end
+
+    test "keeps the work a scenario left with the provider, checks on it in a minute, and records the submission's trace" do
+      FakeHandler.outcome = openai_batch
+
+      freeze_time do
+        workflow_span = with_tracing { perform(retryable: false, handler: CheckingHandler) }
+
+        assert_predicate @run.reload, :running?
+        assert_equal "batch_1", @run.remote_job_id
+        assert_equal %w[batch openai validating], @run.remote_job.values_at("kind", "provider", "raw_status")
+        assert_equal({ "total" => 5, "completed" => 0, "failed" => 0 }, @run.remote_job["request_counts"])
+        assert_nil @run.remote_job["checked_at"]
+        assert_equal [ Run::Trace.new(workflow_span.hex_trace_id, Time.current) ], @run.traces
+        assert_equal Time.current, @run.started_at
+        assert_enqueued_with(job: RunJob, args: [ @run ], at: 1.minute.from_now)
+      end
+    end
+
+    test "checks on unfinished work outside any workflow, keeps what it found, and checks again in a minute" do
+      keep_work(started_at: 5.minutes.ago)
+      started_at = @run.started_at
+      CheckingHandler.check_outcome = openai_batch(raw_status: "in_progress", request_counts: { "total" => 5, "completed" => 2, "failed" => 0 })
+
+      freeze_time do
+        with_tracing { perform(retryable: false, handler: CheckingHandler) }
+
+        assert_predicate @run.reload, :running?
+        assert_equal [ "batch_1" ], CheckingHandler.checked
+        assert_equal [ [ :check, false ] ], FakeHandler.traced
+        assert_equal "in_progress", @run.remote_job["raw_status"]
+        assert_equal({ "total" => 5, "completed" => 2, "failed" => 0 }, @run.remote_job["request_counts"])
+        assert_equal Time.current, Time.zone.parse(@run.remote_job["checked_at"])
+        assert_empty FakeHandler.calls
+        assert_empty FakeHandler.resumed
+        assert_empty @run.traces
+        assert_equal started_at, @run.started_at
+        assert_enqueued_with(job: RunJob, args: [ @run ], at: 1.minute.from_now)
+      end
+    end
+
+    test "collects work that ended inside the workflow, and records the result with the collection's trace" do
+      keep_work(started_at: 1.hour.ago)
+      started_at = @run.started_at
+      CheckingHandler.check_outcome = openai_batch(raw_status: "completed", request_counts: { "total" => 5, "completed" => 5, "failed" => 0 })
+      FakeHandler.resume_outcome = RESULT
+
+      workflow_span = with_tracing { perform(retryable: false, handler: CheckingHandler) }
+
+      assert_predicate @run.reload, :succeeded?
+      assert_equal RESULT, @run.result
+      assert_equal [ "batch_1" ], FakeHandler.resumed
+      assert_equal [ [ :check, false ], [ :resume, true ] ], FakeHandler.traced
+      assert_equal "completed", @run.remote_job["raw_status"]
+      assert_equal [ workflow_span.hex_trace_id ], @run.traces.map(&:id)
+      assert_equal @run.conversation_id, workflow_span.attributes["gen_ai.conversation.id"]
+      assert_equal started_at, @run.started_at
+      assert_empty FakeHandler.calls
+      assert_no_enqueued_jobs
+    end
+
+    test "fails work the provider ended without finishing it, keeping the part it finished" do
+      keep_work
+      CheckingHandler.check_outcome = openai_batch(raw_status: "expired", request_counts: { "total" => 5, "completed" => 3, "failed" => 0 })
+      FakeHandler.resume_outcome = RESULT
+
+      assert_no_error_reported { perform(retryable: false, handler: CheckingHandler) }
+
+      assert_predicate @run.reload, :failed?
+      assert_equal "プロバイダー側の処理の失敗", @run.failure["kind"]
+      assert_equal "OpenAI", @run.failure["provider"]
+      assert_equal "expired", @run.failure["raw_status"]
+      assert_match "expired", @run.failure["message"]
+      assert_match "24 時間以内", @run.failure["hint"]
+      assert_equal RESULT, @run.result
+      assert_no_enqueued_jobs
+    end
+
+    test "cancels a run whose work was cancelled at the provider, keeping the part it finished" do
+      keep_work
+      CheckingHandler.check_outcome = openai_batch(raw_status: "cancelled")
+      FakeHandler.resume_outcome = RESULT
+
+      perform(retryable: false, handler: CheckingHandler)
+
+      assert_predicate @run.reload, :cancelled?
+      assert_equal "プロバイダー側の処理の取り消し", @run.failure["kind"]
+      assert_equal "OpenAI", @run.failure["provider"]
+      assert_equal "cancelled", @run.failure["raw_status"]
+      assert_match "取り消された", @run.failure["hint"]
+      assert_equal RESULT, @run.result
+      assert_not_nil @run.finished_at
+    end
+
+    test "carries a check that could not reach the provider over to the next check" do
+      keep_work
+      CheckingHandler.check_outcome = -> { raise Faraday::ConnectionFailed, "Failed to open TCP connection" }
+
+      freeze_time do
+        assert_no_error_reported { with_tracing { perform(retryable: false, handler: CheckingHandler) } }
+
+        assert_predicate @run.reload, :running?
+        assert_equal({ "kind" => "接続の失敗", "message" => "Failed to open TCP connection", "at" => Time.current.iso8601(3) }, @run.remote_job["check_failure"])
+        assert_empty @run.traces
+        assert_enqueued_with(job: RunJob, args: [ @run ], at: 1.minute.from_now)
+      end
+    end
+
+    test "carries a collection that failed at the provider over to the next check, recording no trace" do
+      keep_work
+      CheckingHandler.check_outcome = openai_batch(raw_status: "completed")
+      FakeHandler.resume_outcome = -> { raise RubyLLM::ServerError, "The server had an error" }
+
+      freeze_time do
+        assert_no_error_reported { with_tracing { perform(retryable: false, handler: CheckingHandler) } }
+
+        assert_predicate @run.reload, :running?
+        assert_equal({ "kind" => "サーバー側のエラー", "message" => "The server had an error", "at" => Time.current.iso8601(3) }, @run.remote_job["check_failure"])
+        assert_empty @run.traces
+        assert_enqueued_with(job: RunJob, args: [ @run ], at: 1.minute.from_now)
+      end
+    end
+
+    test "fails, reports, and stops checking on a collection that fails for an error of this app" do
+      keep_work
+      CheckingHandler.check_outcome = openai_batch(raw_status: "completed")
+      FakeHandler.resume_outcome = -> { raise NoMethodError, "undefined method 'content' for nil" }
+
+      assert_error_reported(NoMethodError) { perform(retryable: false, handler: CheckingHandler) }
+
+      assert_predicate @run.reload, :failed?
+      assert_equal "NoMethodError", @run.failure["kind"]
+      assert_nil @run.result
+      assert_no_enqueued_jobs
+    end
+
+    test "fails, reports, and stops checking on a check that fails for an error of this app" do
+      keep_work
+      CheckingHandler.check_outcome = -> { raise NoMethodError, "undefined method 'refresh'" }
+
+      assert_error_reported(NoMethodError) { perform(retryable: false, handler: CheckingHandler) }
+
+      assert_predicate @run.reload, :failed?
+      assert_equal "NoMethodError", @run.failure["kind"]
+      assert_no_enqueued_jobs
+    end
+
+    test "carries a failed check over until 48 hours after the submission, and then fails with its error" do
+      travel_to(Time.zone.local(2026, 9, 21, 10, 0, 0)) { keep_work }
+      CheckingHandler.check_outcome = -> { raise Faraday::ConnectionFailed, "refused" }
+
+      travel_to(Time.zone.local(2026, 9, 23, 10, 0, 0)) { perform(retryable: false, handler: CheckingHandler) }
+
+      assert_predicate @run.reload, :running?
+      assert_enqueued_jobs 1
+
+      clear_enqueued_jobs
+      travel_to(Time.zone.local(2026, 9, 23, 10, 0, 1)) do
+        assert_no_error_reported { perform(retryable: false, handler: CheckingHandler) }
+      end
+
+      assert_predicate @run.reload, :failed?
+      assert_equal "接続の失敗", @run.failure["kind"]
+      assert_equal "refused", @run.failure["message"]
+      assert_no_enqueued_jobs
+    end
+
+    test "gives up on a collection that fails at the provider more than 48 hours after the submission" do
+      travel_to(Time.zone.local(2026, 9, 21, 10, 0, 0)) { keep_work }
+      CheckingHandler.check_outcome = openai_batch(raw_status: "completed")
+      FakeHandler.resume_outcome = -> { raise RubyLLM::ServerError, "The server had an error" }
+
+      travel_to(Time.zone.local(2026, 9, 23, 10, 0, 1)) do
+        assert_no_error_reported { perform(retryable: false, handler: CheckingHandler) }
+      end
+
+      assert_predicate @run.reload, :failed?
+      assert_equal "サーバー側のエラー", @run.failure["kind"]
+      assert_nil @run.result
+      assert_no_enqueued_jobs
+    end
+
+    test "leaves the same work and one check each when the check runs twice in a row" do
+      keep_work
+      CheckingHandler.check_outcome = openai_batch(raw_status: "in_progress", request_counts: { "total" => 5, "completed" => 1, "failed" => 0 })
+
+      perform(retryable: false, handler: CheckingHandler)
+      first = @run.reload.remote_job.except("checked_at")
+      perform(retryable: false, handler: CheckingHandler)
+
+      assert_equal first, @run.reload.remote_job.except("checked_at")
+      assert_predicate @run, :running?
+      assert_enqueued_jobs 2, only: RunJob
     end
 
     test "finds the run a queued job was for" do
@@ -659,7 +896,13 @@ module Demos
 
     private
 
-    def perform(retryable: true)
+    # The run left a batch with the provider when its job first ran.
+    def keep_work(started_at: 1.minute.ago)
+      @run.update!(started_at: started_at)
+      @run.keep_remote_job!(Scenario.new(**Scenario.members.index_with(nil)).remote_state(openai_batch))
+    end
+
+    def perform(retryable: true, handler: FakeHandler)
       scenario = Scenario.new(
         key: "answer_inquiry",
         demo_key: "responses-api",
@@ -668,7 +911,7 @@ module Demos
         models: { "model" => "gpt-5-nano" },
         inputs: [ Scenario::Input.new(name: "inquiry", label: "問い合わせ", default: "", required: true) ],
         documents: [],
-        handler_name: FakeHandler.name,
+        handler_name: handler.name,
         result_kind: "text_answer",
         retryable: retryable
       )

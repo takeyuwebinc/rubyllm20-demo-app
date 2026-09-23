@@ -5,6 +5,7 @@ require_relative "support/screen_helpers"
 require_relative "support/chat_helpers"
 require_relative "support/research_helpers"
 require_relative "support/document_order_assertions"
+require_relative "support/batch_helpers"
 
 # Tests never call a provider. Fake keys make what they build independent of
 # the developer's .env, which dotenv-rails loads in tests too, and fail any

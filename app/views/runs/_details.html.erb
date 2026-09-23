@@ -15,16 +15,16 @@
       </div>
       <% if sentry_links.available? %>
         <div data-sentry-links class="flex flex-wrap items-center gap-3">
-          <% newest, *older = run.trace_ids.reverse %>
+          <% newest, *older = run.traces.reverse %>
           <% if newest %>
             <%# While the run waits for a decision, 承認する is the page's one primary action. Once the run has ended,
                 the trace is the main way to look into what happened, so the link takes the primary rank back. %>
-            <%= link_to "Sentry でトレースを開く", sentry_trace_url(run, newest), target: "_blank", rel: "noopener",
+            <%= link_to "Sentry でトレースを開く", sentry_trace_url(newest), target: "_blank", rel: "noopener",
                   class: run.awaiting_approval? ? "btn-secondary" : "btn-primary" %>
           <% end %>
           <%= link_to "Sentry で会話を開く", sentry_conversation_url(run), target: "_blank", rel: "noopener", class: "btn-secondary" %>
-          <% older.each.with_index(1) do |trace_id, index| %>
-            <%= link_to "以前のトレース #{index}", sentry_trace_url(run, trace_id), target: "_blank", rel: "noopener", class: "btn-secondary" %>
+          <% older.each.with_index(1) do |trace, index| %>
+            <%= link_to "以前のトレース #{index}", sentry_trace_url(trace), target: "_blank", rel: "noopener", class: "btn-secondary" %>
           <% end %>
         </div>
       <% else %>
@@ -32,8 +32,8 @@
       <% end %>
     </div>
     <%# Shown for as long as the run keeps the id, finished or not: it says the provider holds the work, and gives the id
-        to open that work again from a console. %>
-    <% if run.remote_job_id %>
+        to open that work again from a console. Work that is checked on has a section of its own below, with the id. %>
+    <% if run.remote_job_id && !run.remote_job %>
       <p data-remote-job-id class="mt-2 text-sm text-gray-600">
         プロバイダー側の処理の ID: <code class="rounded bg-gray-100 px-1 py-0.5 break-all"><%= run.remote_job_id %></code>
       </p>
@@ -44,6 +44,10 @@
       </p>
     <% end %>
   </div>
+
+  <% if run.remote_job %>
+    <%= render "runs/remote_job", run: run %>
+  <% end %>
 
   <% if run.running? && run.retries.positive? %>
     <section data-retry class="max-w-prose rounded-md border border-amber-200 bg-amber-50 p-4">
@@ -80,18 +84,19 @@
     </section>
   <% end %>
 
-  <% if run.succeeded? %>
+  <%# A run cancelled at the provider says why, as a failed one does. The reason comes before the result: a failed or
+      cancelled run's result holds only what the provider finished. %>
+  <% if run.failed? || (run.cancelled? && run.failure) %>
+    <section data-failure class="max-w-prose rounded-md border border-red-200 bg-red-50 p-4">
+      <%= render "runs/failure_reason", failure: run.failure || {}, title_class: "text-red-800", message_class: "text-red-900" %>
+    </section>
+  <% end %>
+
+  <% if run.result %>
     <% result_kind = run.scenario&.result_kind || "raw" %>
     <div data-run-result>
       <%= render "runs/results/#{result_kind}", run: run %>
     </div>
-  <% end %>
-
-  <%# A cancellation keeps its reason where a failure does, and is shown the same way. %>
-  <% if run.failed? || run.cancelled? %>
-    <section data-failure class="max-w-prose rounded-md border border-red-200 bg-red-50 p-4">
-      <%= render "runs/failure_reason", failure: run.failure || {}, title_class: "text-red-800", message_class: "text-red-900" %>
-    </section>
   <% end %>
 
   <dl class="grid max-w-xl grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-sm">

@@ -5,6 +5,17 @@ module Demos
 
     FINISHED = %w[succeeded failed cancelled].freeze
 
+    # How long after the run left work with a provider it keeps waiting for
+    # that work. OpenAI ends a batch within 24 hours of its submission,
+    # whatever became of it, so a run that still cannot reach its batch
+    # after twice that gives up rather than wait forever.
+    REMOTE_JOB_DEADLINE = 48.hours
+
+    # A trace of the run, and when it was recorded. Sentry looks a trace up
+    # around a given time, and a run that collects work left with a
+    # provider records its traces hours or days apart.
+    Trace = Data.define(:id, :at)
+
     # How often a run waiting on work kept at the provider is tried again,
     # counting both failures to fetch it and workers that died waiting. It
     # stops a job that kills its own worker, or a provider that keeps
@@ -174,8 +185,19 @@ module Demos
       fail!(failure_from(error, kind))
     end
 
-    def fail!(failure)
-      update!(status: :failed, failure: failure, finished_at: Time.current)
+    # A failed run may still have a result, such as the part of a batch the
+    # provider finished before the batch expired, which was billed.
+    def fail!(failure, result: nil)
+      refuse_transition!("failed")
+      update!(status: :failed, failure: failure, result: result, finished_at: Time.current)
+    end
+
+    # Records that the provider cancelled the work the run left with it. The
+    # reason is kept where a failure's is, and the part the provider
+    # finished before it was cancelled, if any, as the result.
+    def cancel!(failure, result: nil)
+      refuse_unless_running!
+      update!(status: :cancelled, failure: failure, result: result, finished_at: Time.current)
     end
 
     # Fails the run for a reason other than a provider call.
@@ -263,7 +285,68 @@ module Demos
     end
 
     def add_trace_id!(trace_id)
-      update!(trace_ids: trace_ids + [ trace_id ]) unless trace_ids.include?(trace_id)
+      return if traces.any? { |trace| trace.id == trace_id }
+
+      update!(trace_ids: trace_ids + [ { "id" => trace_id, "at" => Time.current.iso8601(3) } ])
+    end
+
+    # A trace kept as a bare id, with no time of its own, is dated by the
+    # run's start, or by its creation.
+    def traces
+      trace_ids.map do |entry|
+        entry.is_a?(Hash) ? Trace.new(entry["id"], Time.zone.parse(entry["at"])) : Trace.new(entry, started_at || created_at)
+      end
+    end
+
+    # Keeps what the run left with a provider to be checked on, such as a
+    # batch, so that a later job can check on it and collect it. +state+ is
+    # the work as the scenario reads it (kind, id, provider, raw_status,
+    # request_counts). The id goes where the id of any work left with the
+    # provider goes, and the rest beside it, so the history shows the last
+    # state without asking the provider. The run stays running meanwhile:
+    # the work is under way at the provider, and a run has no status of its
+    # own for that.
+    #
+    # The run keeps the work's id rather than a reference to RubyLLM's own
+    # record of it: finding the work by id (RubyLLM::Batch.find) is public,
+    # and RubyLLM's tables are not.
+    def keep_remote_job!(state)
+      transaction do
+        record_remote_job_id!(state.id)
+        update!(remote_job: {
+          "kind" => state.kind,
+          "provider" => state.provider,
+          "submitted_at" => Time.current.iso8601(3),
+          "raw_status" => state.raw_status,
+          "request_counts" => state.request_counts,
+          "checked_at" => nil,
+          "check_failure" => nil
+        })
+      end
+    end
+
+    # Keeps what a check on the work found. A check that got through clears
+    # the last failed one.
+    def record_remote_check!(state)
+      refuse_unless_running!
+      update!(remote_job: remote_job.merge(
+        "raw_status" => state.raw_status,
+        "request_counts" => state.request_counts,
+        "checked_at" => Time.current.iso8601(3),
+        "check_failure" => nil
+      ))
+    end
+
+    # Keeps why the last check on the work could not reach the provider.
+    # What the previous check found stays as it was.
+    def record_remote_check_failure!(error)
+      refuse_unless_running!
+      failure = { "kind" => FailureKinds.for(error)&.name || error.class.name, "message" => error.message, "at" => Time.current.iso8601(3) }
+      update!(remote_job: remote_job.merge("check_failure" => failure))
+    end
+
+    def remote_job_overdue?(now = Time.current)
+      now > Time.zone.parse(remote_job.fetch("submitted_at")) + REMOTE_JOB_DEADLINE
     end
 
     private

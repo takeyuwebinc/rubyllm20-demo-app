@@ -32,6 +32,17 @@ module Demos
       def preparing? = state == :preparing
     end
 
+    # Work a handler left with a provider, read the same way whatever kind
+    # of work it is. The status is :pending until the work ends, and then
+    # :succeeded, :failed, or :cancelled. raw_status is the provider's own
+    # word for it, and request_counts its tally, as the provider reported
+    # them.
+    RemoteState = Data.define(:kind, :id, :provider, :status, :raw_status, :request_counts) do
+      def pending? = status == :pending
+      def succeeded? = status == :succeeded
+      def cancelled? = status == :cancelled
+    end
+
     def demo
       Catalog.demo(demo_key)
     end
@@ -94,6 +105,43 @@ module Demos
       handler.resume(chat)
     end
 
+    # Whether the work the handler leaves with the provider is checked on
+    # by the job until it ends, as a batch is, rather than waited for.
+    def checks_remote_job?
+      handler.respond_to?(:check)
+    end
+
+    # Asks the handler how the work the run left with the provider is doing,
+    # given the id the run keeps. Only a handler that checks on its work
+    # has this.
+    def check_remote_job(id)
+      remote_state(handler.check(id))
+    end
+
+    # Collects the work the run left with the provider once it has ended,
+    # given the id the run keeps. Returns as perform does. Only a handler
+    # that checks on its work has this: one that waits for its work takes
+    # the models as well, in resume_remote_job.
+    def collect_remote_job(id)
+      handler.resume(id)
+    end
+
+    # Reads the work a handler left with a provider, as RubyLLM returned it.
+    # Each kind of RubyLLM's provider-side work tells how it is doing with
+    # predicates of its own, so the reading is kept here, one per kind, and
+    # the job that waits on the work reads only the RemoteState.
+    def remote_state(work)
+      case work
+      when RubyLLM::Batch
+        RemoteState.new(
+          kind: "batch", id: work.id, provider: work.provider, status: batch_status(work),
+          raw_status: work.raw_status, request_counts: work.request_counts
+        )
+      else
+        raise ArgumentError, "No reading of #{work.class} as work left with a provider"
+      end
+    end
+
     # Waits for the work the handler left with the provider, given the id
     # the run keeps, with each model as a keyword as perform has them.
     # Returns as perform does. Only a handler that leaves work with the
@@ -103,6 +151,15 @@ module Demos
     end
 
     private
+
+    # OpenAI's expired batch reads as failed: it ended without finishing.
+    def batch_status(batch)
+      return :pending unless batch.complete?
+      return :succeeded if batch.succeeded?
+      return :cancelled if batch.cancelled?
+
+      :failed
+    end
 
     def document_paths
       documents.to_h { |document| [ document.name.to_sym, document.absolute_path ] }

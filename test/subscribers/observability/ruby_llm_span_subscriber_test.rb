@@ -402,13 +402,126 @@ module Observability
     test "records every physical attempt, including failed ones" do
       tokens = RubyLLM::Tokens.new(input: 12, output: 0)
 
-      instrument("usage.ruby_llm", operation: :chat, provider: "openai", model: "gpt-5-nano", status: :failed, tokens: tokens, cost: FakeCost.new(nil))
+      instrument("chat.ruby_llm", chat_payload) do |payload|
+        instrument("usage.ruby_llm", operation: :chat, provider: "openai", model: "gpt-5-nano", status: :failed, tokens: tokens, cost: FakeCost.new(nil))
+        complete(payload)
+      end
 
-      attributes = span("attempt chat gpt-5-nano").attributes
+      chat, attempt = spans_named("chat gpt-5-nano", "attempt chat gpt-5-nano")
+      attributes = attempt.attributes
 
+      assert_equal chat.span_id, attempt.parent_span_id
       assert_equal "failed", attributes["ruby_llm.attempt.status"]
       assert_equal 12, attributes["ruby_llm.attempt.input_tokens"]
       assert_empty attributes.keys.grep(/\Agen_ai\.usage/), "attempt spans must not be double counted with the chat span"
+      assert_nil attributes["gen_ai.operation.name"]
+      assert_nil attributes["sentry.op"]
+    end
+
+    test "keeps usage inside any other operation an attempt" do
+      instrument("batch.ruby_llm", provider: "openai", requests: 1) do
+        instrument("usage.ruby_llm", operation: :chat, provider: "openai", model: "gpt-5-nano", status: :succeeded, tokens: RubyLLM::Tokens.new(input: 3, output: 4), cost: FakeCost.new(nil))
+      end
+
+      assert_nil span("attempt chat gpt-5-nano").attributes["sentry.op"]
+    end
+
+    test "reports usage that no operation encloses, as a batch's collected answers have, as that operation itself" do
+      tokens = RubyLLM::Tokens.new(input: 180, output: 40)
+
+      instrument("workflow.ruby_llm", workflow_name: "Batches: classify", workflow_metadata: { conversation_id: "run-1" }) do
+        instrument("request.ruby_llm", provider: "openai", method: :get, url: "batches/batch_1") { |p| p[:status] = 200 }
+        instrument("usage.ruby_llm", workflow_name: "Batches: classify", operation: :chat, provider: "openai", model: "gpt-5-nano-2025-08-07",
+          status: :succeeded, tokens: tokens, cost: FakeCost.new(0.000021))
+      end
+
+      workflow, chat = spans_named("invoke_agent Batches: classify", "chat gpt-5-nano-2025-08-07")
+      attributes = chat.attributes
+
+      assert_equal workflow.span_id, chat.parent_span_id
+      assert_equal "gen_ai.chat", attributes["sentry.op"]
+      assert_equal "chat", attributes["gen_ai.operation.name"]
+      assert_equal "openai", attributes["gen_ai.provider.name"]
+      assert_equal "gpt-5-nano-2025-08-07", attributes["gen_ai.request.model"]
+      assert_equal "gpt-5-nano-2025-08-07", attributes["gen_ai.response.model"]
+      assert_equal 180, attributes["gen_ai.usage.input_tokens"]
+      assert_equal 40, attributes["gen_ai.usage.output_tokens"]
+      assert_equal 220, attributes["gen_ai.usage.total_tokens"]
+      assert_in_delta 0.000021, attributes["gen_ai.cost.total_tokens"]
+      assert_equal "run-1", attributes["gen_ai.conversation.id"]
+      assert_equal "Batches: classify", attributes["gen_ai.agent.name"]
+      assert_empty attributes.keys.grep(/\Aruby_llm\.attempt/)
+      assert_empty attributes.keys.grep(/messages|instructions/), "the event carries no prompt or answer"
+    end
+
+    test "reports usage that no workflow and no operation encloses as that operation, in a trace of its own" do
+      instrument("usage.ruby_llm", operation: :chat, provider: "openai", model: "gpt-5-nano", status: :succeeded,
+        tokens: RubyLLM::Tokens.new(input: 3, output: 4), cost: FakeCost.new(nil))
+
+      chat = span("chat gpt-5-nano")
+
+      assert_equal "gen_ai.chat", chat.attributes["sentry.op"]
+      assert_equal OpenTelemetry::Trace::INVALID_SPAN_ID, chat.parent_span_id
+    end
+
+    test "keeps usage of an operation it cannot describe as an attempt" do
+      instrument("usage.ruby_llm", operation: :unknown_work, provider: "openai", model: "gpt-5-nano", status: :succeeded,
+        tokens: RubyLLM::Tokens.new(input: 3), cost: FakeCost.new(nil))
+
+      assert_equal "unknown_work", span("attempt unknown_work gpt-5-nano").attributes["ruby_llm.attempt.operation"]
+    end
+
+    # RubyLLM prices a batch answer of a model without batch prices at half
+    # the standard rate, part by part, and leaves the total nil when the
+    # answer has reasoning tokens, which the output part already includes.
+    test "sends the sum of a batch answer's parts when only its reasoning is left unpriced" do
+      tokens = RubyLLM::Tokens.new(input: 296, output: 665, thinking: 576)
+      cost = RubyLLM::Cost.from_h({ input: 0.0000074, output: 0.000133 }, tokens: tokens)
+      assert_nil cost.total
+
+      instrument("usage.ruby_llm", operation: :chat, provider: "openai", model: "gpt-5-nano-2025-08-07", status: :succeeded, tokens: tokens, cost: cost)
+
+      assert_in_delta 0.0001404, span("chat gpt-5-nano-2025-08-07").attributes["gen_ai.cost.total_tokens"], 1e-12
+    end
+
+    test "sends no cost when a part other than reasoning is unpriced, or reasoning exceeds the output" do
+      [
+        [ RubyLLM::Tokens.new(input: 296, output: 665, thinking: 576), RubyLLM::Cost.from_h({ input: 0.0000074 }, tokens: RubyLLM::Tokens.new(input: 296, output: 665, thinking: 576)) ],
+        [ RubyLLM::Tokens.new(input: 296, output: 665, cache_read: 100, thinking: 576), RubyLLM::Cost.from_h({ input: 0.0000074, output: 0.000133 }, tokens: RubyLLM::Tokens.new(input: 296, output: 665, cache_read: 100, thinking: 576)) ],
+        [ RubyLLM::Tokens.new(input: 296, output: 100, thinking: 576), RubyLLM::Cost.from_h({ input: 0.0000074, output: 0.00002 }, tokens: RubyLLM::Tokens.new(input: 296, output: 100, thinking: 576)) ]
+      ].each_with_index do |(tokens, cost), index|
+        @exporter.reset
+        instrument("usage.ruby_llm", operation: :chat, provider: "openai", model: "gpt-5-nano", status: :succeeded, tokens: tokens, cost: cost)
+
+        assert_nil span("chat gpt-5-nano").attributes["gen_ai.cost.total_tokens"], "case #{index}"
+      end
+    end
+
+    test "describes a batch submission by its id and its number of requests" do
+      instrument("workflow.ruby_llm", workflow_name: "Batches: classify", workflow_metadata: { conversation_id: "run-1" }) do
+        instrument("batch.ruby_llm", workflow_name: "Batches: classify", provider: "openai", requests: 5) { |payload| payload[:batch_id] = "batch_69d2" }
+      end
+
+      attributes = span("batch").attributes
+
+      assert_equal "batch", attributes["ruby_llm.operation"]
+      assert_equal "openai", attributes["gen_ai.provider.name"]
+      assert_equal "batch_69d2", attributes["ruby_llm.batch.id"]
+      assert_equal 5, attributes["ruby_llm.batch.requests"]
+      assert_equal "run-1", attributes["gen_ai.conversation.id"]
+    end
+
+    test "leaves the id out of a batch submission that failed, and marks it failed" do
+      assert_raises(RubyLLM::BadRequestError) do
+        instrument("batch.ruby_llm", provider: "openai", requests: 5) { raise RubyLLM::BadRequestError, "Invalid file" }
+      end
+
+      batch = span("batch")
+
+      assert_not_includes batch.attributes.keys, "ruby_llm.batch.id"
+      assert_equal 5, batch.attributes["ruby_llm.batch.requests"]
+      assert_equal "RubyLLM::BadRequestError", batch.attributes["error.type"]
+      assert_equal OpenTelemetry::Trace::Status::ERROR, batch.status.code
     end
 
     test "marks the span as failed and keeps the error as attributes" do

@@ -1171,6 +1171,202 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
+  test "shows the batch a running run left with OpenAI, says when it is checked next, and keeps polling" do
+    run = create_batch_run
+
+    get run_path(run)
+
+    assert_select "[data-run-status]", text: "実行中"
+    assert_select "[data-controller='poll'][data-poll-active-value='true']"
+    assert_select "[data-remote-job]" do
+      assert_select "*", text: /投入済み/
+      assert_select "[data-remote-job-id]", text: "batch_69d2"
+      assert_select "dd", text: "OpenAI"
+      assert_select "[data-remote-job-status]", text: "in_progress"
+      assert_select "[data-remote-job-counts]", text: "成功 1 件、失敗 0 件、全 2 件"
+      assert_select "[data-remote-job-submitted-at]", text: Time.zone.parse(run.remote_job["submitted_at"]).strftime("%Y-%m-%d %H:%M:%S")
+      assert_select "[data-remote-job-checked-at]", text: Time.zone.parse(run.remote_job["checked_at"]).strftime("%Y-%m-%d %H:%M:%S")
+      assert_select "[data-remote-job-next-check]", text: /約 1 分/
+      assert_select "*", text: /画面を離れても/
+      assert_select "[data-remote-job-check-failure]", count: 0
+    end
+    assert_select "*", text: /ワーカー/
+    assert_before "[data-run-status-row]", "[data-remote-job]"
+  end
+
+  test "shows why the last check could not reach OpenAI" do
+    run = create_batch_run
+    travel_to(Time.zone.local(2026, 9, 23, 11, 0, 0)) { run.record_remote_check_failure!(Faraday::ConnectionFailed.new("Failed to open TCP connection")) }
+
+    get run_path(run)
+
+    assert_select "[data-remote-job-check-failure]" do
+      assert_select "*", text: /接続の失敗/
+      assert_select "*", text: /Failed to open TCP connection/
+      assert_select "*", text: /2026-09-23 11:00:00/
+    end
+  end
+
+  test "shows a dash for counts not reported yet, and a batch never checked as not checked" do
+    run = create_batch_run(checked: false)
+    run.update!(remote_job: run.remote_job.merge("request_counts" => nil))
+
+    get run_path(run)
+
+    assert_select "[data-remote-job-counts]", text: "—"
+    assert_select "[data-remote-job-checked-at]", text: "未確認"
+  end
+
+  test "shows no batch for a run that left none with a provider" do
+    get run_path(create_run)
+
+    assert_select "[data-remote-job]", count: 0
+  end
+
+  test "shows the classified tickets of a collected batch, in the order they were submitted" do
+    run = create_batch_run(raw_status: "completed")
+    run.succeed!(batch_result([
+      [ "荷物が届かない。", "succeeded", "配送", "未着の問い合わせのため" ],
+      [ "返品したい。", "succeeded", "返品・返金", "返品の申し出のため" ]
+    ]))
+
+    get run_path(run)
+
+    assert_select "[data-run-status]", text: "成功"
+    assert_select "[data-controller='poll'][data-poll-active-value='false']"
+    assert_select "[data-remote-job]" do
+      assert_select "[data-remote-job-next-check]", count: 0
+      assert_select "*", text: /画面を離れても/, count: 0
+    end
+    assert_select "[data-run-result] [data-batch-classification]" do
+      assert_select "[data-batch-status]", text: "completed"
+      assert_select "[data-batch-counts]", text: "成功 2 件、失敗 0 件、全 2 件"
+      assert_select "[data-batch-id]", text: "batch_69d2"
+      assert_select "[data-batch-model]", text: "gpt-5-nano-2025-08-07"
+      assert_select "[data-ticket]", 2
+      assert_select "[data-ticket]:nth-of-type(1)" do
+        assert_select "[data-ticket-text]", text: "荷物が届かない。"
+        assert_select "[data-ticket-status]", text: "成功"
+        assert_select "[data-ticket-category]", text: "配送"
+        assert_select "[data-ticket-reason]", text: "未着の問い合わせのため"
+      end
+      assert_select "[data-ticket]:nth-of-type(2) [data-ticket-category]", text: "返品・返金"
+    end
+    assert_before "[data-sentry-links]", "[data-run-result]"
+  end
+
+  test "says a ticket without an answer failed, and that RubyLLM logs why" do
+    run = create_batch_run(raw_status: "completed")
+    run.succeed!(batch_result([ [ "荷物が届かない。", "succeeded", "配送", "未着のため" ], [ "返品したい。", "failed", nil, nil ] ]))
+
+    get run_path(run)
+
+    assert_select "[data-ticket]:nth-of-type(2)" do
+      assert_select "[data-ticket-status]", text: "失敗"
+      assert_select "[data-ticket-category]", count: 0
+      assert_select "[data-ticket-missing]", text: /回答がない.*RubyLLM のログ/m
+    end
+  end
+
+  test "shows a batch of one ticket as a list, and a batch whose every ticket failed as a success with failed tickets" do
+    run = create_batch_run(raw_status: "completed")
+    run.succeed!(batch_result([ [ "荷物が届かない。", "failed", nil, nil ] ], model: nil))
+
+    get run_path(run)
+
+    assert_select "[data-run-status]", text: "成功"
+    assert_select "[data-batch-classification] [data-ticket]", 1
+    assert_select "[data-ticket-status]", text: "失敗"
+    assert_select "[data-batch-model]", text: "—"
+  end
+
+  test "says a ticket was answered but its answer could not be read as a category" do
+    run = create_batch_run(raw_status: "completed")
+    run.succeed!(batch_result([ [ "荷物が届かない。", "succeeded", nil, nil ] ]))
+
+    get run_path(run)
+
+    assert_select "[data-ticket]" do
+      assert_select "[data-ticket-status]", text: "成功"
+      assert_select "[data-ticket-category]", count: 0
+      assert_select "[data-ticket-missing]", count: 0
+      assert_select "[data-ticket-unreadable]", text: /区分として読めなかった.*会話の記録/m
+    end
+  end
+
+  test "shows a batch whose every ticket failed as a success, with every ticket failed" do
+    run = create_batch_run(raw_status: "completed")
+    run.succeed!(batch_result([ [ "荷物が届かない。", "failed", nil, nil ], [ "返品したい。", "failed", nil, nil ] ], model: nil))
+
+    get run_path(run)
+
+    assert_select "[data-run-status]", text: "成功"
+    assert_select "[data-batch-counts]", text: "成功 0 件、失敗 2 件、全 2 件"
+    assert_select "[data-ticket]", 2
+    assert_select "[data-ticket] [data-ticket-status]" do |badges|
+      assert_equal %w[失敗 失敗], badges.map { |badge| badge.text.strip }
+    end
+    assert_select "[data-ticket-missing]", 2
+  end
+
+  test "shows why an expired batch failed, and what it finished" do
+    run = create_batch_run(raw_status: "expired")
+    run.fail!(
+      { "provider" => "OpenAI", "kind" => "プロバイダー側の処理の失敗", "raw_status" => "expired",
+        "message" => "プロバイダーが返した状態: expired", "hint" => FailureKinds::REMOTE_JOB_FAILED.hint },
+      result: batch_result([ [ "荷物が届かない。", "succeeded", "配送", "未着のため" ], [ "返品したい。", "failed", nil, nil ] ], raw_status: "expired")
+    )
+
+    with_env(SENTRY) { get run_path(run) }
+
+    assert_select "[data-run-status]", text: "失敗"
+    assert_select "[data-failure]" do
+      assert_select "*", text: /プロバイダー側の処理の失敗（OpenAI）/
+      assert_select "*", text: /expired/
+      assert_select "*", text: /24 時間以内に処理されなかった/
+    end
+    assert_select "[data-run-result] [data-batch-classification]" do
+      assert_select "[data-batch-status]", text: "expired"
+      assert_select "[data-ticket]:nth-of-type(1) [data-ticket-category]", text: "配送"
+      assert_select "[data-ticket]:nth-of-type(2) [data-ticket-status]", text: "失敗"
+    end
+    assert_before "[data-sentry-links]", "[data-failure]"
+    assert_before "[data-failure]", "[data-run-result]"
+  end
+
+  test "shows why a cancelled batch was cancelled, what it finished, and that the rest was cancelled" do
+    run = create_batch_run(raw_status: "cancelled")
+    run.cancel!(
+      { "provider" => "OpenAI", "kind" => "プロバイダー側の処理の取り消し", "raw_status" => "cancelled",
+        "message" => "プロバイダーが返した状態: cancelled", "hint" => FailureKinds::REMOTE_JOB_CANCELLED.hint },
+      result: batch_result([ [ "荷物が届かない。", "succeeded", "配送", "未着のため" ], [ "返品したい。", "cancelled", nil, nil ] ], raw_status: "cancelled")
+    )
+
+    get run_path(run)
+
+    assert_select "[data-run-status]", text: "取り消し"
+    assert_select "[data-controller='poll'][data-poll-active-value='false']"
+    assert_select "[data-failure]" do
+      assert_select "*", text: /プロバイダー側の処理の取り消し（OpenAI）/
+      assert_select "*", text: /cancelled/
+      assert_select "*", text: /バッチが取り消された/
+    end
+    assert_select "[data-ticket]:nth-of-type(2)" do
+      assert_select "[data-ticket-status]", text: "取り消し"
+      assert_select "[data-ticket-missing]", text: /取り消された/
+    end
+  end
+
+  test "shows only why a run failed when it has no result" do
+    run = create_run
+    run.fail_with!(RubyLLM::RateLimitError.new("You exceeded your current quota"))
+
+    get run_path(run)
+
+    assert_select "[data-failure]", text: /レート制限/
+    assert_select "[data-run-result]", count: 0
+  end
+
   test "shows the input as it was sent" do
     get run_path(create_run)
 
@@ -1216,6 +1412,17 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
     assert_select "a.btn-primary[href*='/explore/traces/trace/22222222222222222222222222222222/']", text: "Sentry でトレースを開く"
     assert_select "a.btn-secondary[href*='/explore/traces/trace/11111111111111111111111111111111/']"
     assert_select "a[href*='/explore/agents/conversations/#{run.conversation_id}/']", text: "Sentry で会話を開く"
+  end
+
+  test "dates each trace link by when its trace was recorded, and a bare trace id by the run's start" do
+    started_at = Time.zone.local(2026, 9, 23, 10, 0, 0)
+    collected_at = Time.zone.local(2026, 9, 24, 9, 30, 0)
+    run = create_run(started_at: started_at, trace_ids: [ "11111111111111111111111111111111", { "id" => "22222222222222222222222222222222", "at" => collected_at.iso8601(3) } ])
+
+    with_env(SENTRY) { get run_path(run) }
+
+    assert_select "a[href*='/trace/22222222222222222222222222222222/'][href*='timestamp=#{collected_at.to_i}']", text: "Sentry でトレースを開く"
+    assert_select "a[href*='/trace/11111111111111111111111111111111/'][href*='timestamp=#{started_at.to_i}']", text: "以前のトレース 1"
   end
 
   test "offers only the conversation when no trace was recorded" do

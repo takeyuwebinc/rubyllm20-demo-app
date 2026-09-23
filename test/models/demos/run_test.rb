@@ -313,12 +313,165 @@ module Demos
       assert_nil run.failure["hint"]
     end
 
-    test "adds each trace id once" do
+    test "adds each trace id once, with when it was recorded" do
       run = create_run
 
-      2.times { run.add_trace_id!("0af7651916cd43dd8448eb211c80319c") }
+      travel_to Time.zone.local(2026, 9, 23, 10, 0, 0) do
+        2.times { run.add_trace_id!("0af7651916cd43dd8448eb211c80319c") }
+      end
 
-      assert_equal [ "0af7651916cd43dd8448eb211c80319c" ], run.reload.trace_ids
+      assert_equal [ Run::Trace.new("0af7651916cd43dd8448eb211c80319c", Time.zone.local(2026, 9, 23, 10, 0, 0)) ], run.reload.traces
+    end
+
+    test "dates a trace kept as a bare id by the run's start, or its creation, and any other by when it was recorded" do
+      run = create_run(
+        created_at: Time.zone.local(2026, 9, 23, 9, 0, 0),
+        trace_ids: [ "11111111111111111111111111111111", { "id" => "22222222222222222222222222222222", "at" => "2026-09-24T09:30:00.000+09:00" } ]
+      )
+
+      assert_equal [ Time.zone.local(2026, 9, 23, 9, 0, 0), Time.zone.local(2026, 9, 24, 9, 30, 0) ], run.traces.map(&:at)
+      run.update!(started_at: Time.zone.local(2026, 9, 23, 9, 0, 5))
+      assert_equal [ Time.zone.local(2026, 9, 23, 9, 0, 5), Time.zone.local(2026, 9, 24, 9, 30, 0) ], run.traces.map(&:at)
+      assert_equal %w[11111111111111111111111111111111 22222222222222222222222222222222], run.traces.map(&:id)
+    end
+
+    test "keeps what the run left with a provider, and stays running" do
+      run = create_run
+
+      travel_to Time.zone.local(2026, 9, 23, 10, 0, 0) do
+        run.keep_remote_job!(remote_state)
+      end
+
+      assert_predicate run.reload, :running?
+      assert_equal "batch_1", run.remote_job_id
+      assert_equal({
+        "kind" => "batch", "provider" => "openai", "submitted_at" => "2026-09-23T10:00:00.000+09:00",
+        "raw_status" => "validating", "request_counts" => { "total" => 5, "completed" => 0, "failed" => 0 },
+        "checked_at" => nil, "check_failure" => nil
+      }, run.remote_job)
+      assert_nil run.finished_at
+    end
+
+    test "keeps work whose provider reports no counts" do
+      run = create_run
+
+      run.keep_remote_job!(remote_state(request_counts: nil))
+
+      assert_nil run.reload.remote_job["request_counts"]
+    end
+
+    test "updates the kept work with what a check found, and forgets the last failed check" do
+      run = create_run
+      run.keep_remote_job!(remote_state)
+      run.record_remote_check_failure!(Faraday::ConnectionFailed.new("refused"))
+
+      travel_to Time.zone.local(2026, 9, 23, 10, 5, 0) do
+        run.record_remote_check!(remote_state(raw_status: "in_progress", request_counts: { "total" => 5, "completed" => 2, "failed" => 1 }))
+      end
+
+      remote_job = run.reload.remote_job
+      assert_equal "in_progress", remote_job["raw_status"]
+      assert_equal({ "total" => 5, "completed" => 2, "failed" => 1 }, remote_job["request_counts"])
+      assert_equal "2026-09-23T10:05:00.000+09:00", remote_job["checked_at"]
+      assert_nil remote_job["check_failure"]
+      assert_equal "batch_1", run.remote_job_id
+      assert_predicate run, :running?
+    end
+
+    test "records a failed check and nothing else" do
+      run = create_run
+      run.keep_remote_job!(remote_state)
+      kept = run.reload.remote_job
+
+      travel_to Time.zone.local(2026, 9, 23, 10, 6, 0) do
+        run.record_remote_check_failure!(Faraday::ConnectionFailed.new("Failed to open TCP connection"))
+      end
+
+      remote_job = run.reload.remote_job
+      assert_equal({ "kind" => "接続の失敗", "message" => "Failed to open TCP connection", "at" => "2026-09-23T10:06:00.000+09:00" }, remote_job["check_failure"])
+      assert_equal kept.except("check_failure"), remote_job.except("check_failure")
+      assert_predicate run, :running?
+    end
+
+    test "names a failed check outside the table by its class" do
+      run = create_run
+      run.keep_remote_job!(remote_state)
+
+      run.record_remote_check_failure!(JSON::ParserError.new("unexpected token"))
+
+      assert_equal "JSON::ParserError", run.reload.remote_job["check_failure"]["kind"]
+    end
+
+    test "gives up on kept work only after 48 hours from its submission" do
+      run = create_run
+      travel_to(Time.zone.local(2026, 9, 23, 10, 0, 0)) { run.keep_remote_job!(remote_state) }
+
+      refute run.remote_job_overdue?(Time.zone.local(2026, 9, 25, 10, 0, 0))
+      assert run.remote_job_overdue?(Time.zone.local(2026, 9, 25, 10, 0, 1))
+    end
+
+    test "records a failure together with a result" do
+      run = create_run
+
+      freeze_time do
+        run.fail!({ "kind" => "プロバイダー側の処理の失敗" }, result: { "tickets" => [] })
+
+        assert_predicate run.reload, :failed?
+        assert_equal({ "kind" => "プロバイダー側の処理の失敗" }, run.failure)
+        assert_equal({ "tickets" => [] }, run.result)
+        assert_equal Time.current, run.finished_at
+      end
+    end
+
+    test "records a cancellation with its reason and a result" do
+      run = create_run
+
+      freeze_time do
+        run.cancel!({ "kind" => "プロバイダー側の処理の取り消し", "provider" => "OpenAI" }, result: { "tickets" => [] })
+
+        assert_predicate run.reload, :cancelled?
+        assert_equal({ "kind" => "プロバイダー側の処理の取り消し", "provider" => "OpenAI" }, run.failure)
+        assert_equal({ "tickets" => [] }, run.result)
+        assert_equal Time.current, run.finished_at
+      end
+    end
+
+    test "refuses to keep or check work, cancel, or fail again on a finished run, and changes nothing" do
+      succeeded = create_run.tap { |run| run.succeed!({ "answer" => "done" }) }
+      failed = create_run.tap { |run| run.fail!({ "kind" => "レート制限" }) }
+      cancelled = create_run.tap { |run| run.cancel!({ "kind" => "プロバイダー側の処理の取り消し" }) }
+
+      [ succeeded, failed, cancelled ].each do |run|
+        before = run.reload.attributes
+        assert_raises(ActiveRecord::RecordInvalid) { run.keep_remote_job!(remote_state) }
+        assert_raises(ArgumentError) { run.record_remote_check!(remote_state) }
+        assert_raises(ArgumentError) { run.record_remote_check_failure!(Faraday::ConnectionFailed.new("refused")) }
+        assert_raises(ArgumentError) { run.cancel!({ "kind" => "プロバイダー側の処理の取り消し" }, result: { "tickets" => [] }) }
+        assert_raises(ActiveRecord::RecordInvalid) { run.fail!({ "kind" => "プロバイダー側の処理の失敗" }, result: { "tickets" => [] }) }
+        assert_equal before, run.reload.attributes, run.status
+      end
+    end
+
+    test "refuses to keep work for, or cancel, a run waiting for approval" do
+      run = create_awaiting_run
+
+      assert_raises(ActiveRecord::RecordInvalid) { run.keep_remote_job!(remote_state) }
+      assert_raises(ArgumentError) { run.cancel!({ "kind" => "プロバイダー側の処理の取り消し" }) }
+
+      assert_predicate run.reload, :awaiting_approval?
+      assert_nil run.remote_job_id
+      assert_nil run.remote_job
+    end
+
+    test "queues again the job of a run a dead worker left while it waited on a provider, and keeps its work" do
+      run = create_run
+      run.keep_remote_job!(remote_state)
+
+      Run.fail_abandoned!([ run.id ], message: "pid 42 died")
+
+      assert_predicate run.reload, :running?
+      assert_equal "batch_1", run.remote_job_id
+      assert_enqueued_with(job: RunJob, args: [ run ])
     end
 
     test "fails the runs a dead worker left running with nothing kept at the provider, and only those" do
@@ -635,6 +788,14 @@ module Demos
     end
 
     private
+
+    # Work left with a provider, as the scenario reads it from what the
+    # handler returned.
+    RemoteState = Struct.new(:kind, :id, :provider, :raw_status, :request_counts, keyword_init: true)
+
+    def remote_state(raw_status: "validating", request_counts: { "total" => 5, "completed" => 0, "failed" => 0 })
+      RemoteState.new(kind: "batch", id: "batch_1", provider: "openai", raw_status:, request_counts:)
+    end
 
     def runnable_scenario(**overrides)
       Scenario.new(

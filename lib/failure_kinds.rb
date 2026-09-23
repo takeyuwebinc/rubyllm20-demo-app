@@ -101,6 +101,21 @@ module FailureKinds
     "ジョブのワーカーが止まってジョブが戻されたが、途中から再開できる記録がない。もう一度実行する"
   )
 
+  # Not raised by a provider call: the provider ended the work a run left
+  # with it, such as a batch, without finishing it.
+  REMOTE_JOB_FAILED = Kind.new(
+    "プロバイダー側の処理の失敗",
+    "期限切れ（expired）なら 24 時間以内に処理されなかった。完了した分は課金され、結果に残る。" \
+    "OpenAI のダッシュボードでバッチの状態と理由を確かめる"
+  )
+
+  # Not raised by a provider call: the work a run left with the provider was
+  # cancelled there.
+  REMOTE_JOB_CANCELLED = Kind.new(
+    "プロバイダー側の処理の取り消し",
+    "OpenAI のダッシュボードなどでバッチが取り消された。取り消す前に完了した分は結果に残る"
+  )
+
   # Not raised as its own error: the provider reports that the work was
   # cancelled, which a research job's wait raises as an Error.
   CANCELLED = Kind.new(

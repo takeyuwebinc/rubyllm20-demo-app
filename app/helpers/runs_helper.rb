@@ -44,6 +44,21 @@ module RunsHelper
     link_to text, url, target: "_blank", rel: "noopener", class: "link-quiet"
   end
 
+  # The outcome of one request of a batch, in the words and colors of a
+  # run's status: a request succeeds, fails, or is cancelled as a run does.
+  def request_status_badge(status)
+    tag.span(STATUS_LABELS.fetch(status, status), data: { ticket_status: status },
+      class: "inline-flex shrink-0 items-center whitespace-nowrap rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset #{STATUS_STYLES.fetch(status, STATUS_STYLES["cancelled"])}")
+  end
+
+  # The provider's tally of a batch's requests, or a dash while it reports
+  # none. OpenAI counts a request as completed once it succeeded.
+  def request_counts_text(counts)
+    return "—" if counts.blank?
+
+    "成功 #{counts["completed"].to_i} 件、失敗 #{counts["failed"].to_i} 件、全 #{counts["total"].to_i} 件"
+  end
+
   # The answer with a numbered mark at the end of the span each source
   # supports, linking to the source in the list. Marks rather than a list of
   # the spans: Anthropic splits the answer at each claim, often in the middle
@@ -98,7 +113,9 @@ module RunsHelper
     run.scenario&.demo&.name
   end
 
+  # Takes a time, or a time kept as an ISO 8601 string in a JSON column.
   def format_time(time)
+    time = Time.zone.parse(time) if time.is_a?(String)
     time&.strftime("%Y-%m-%d %H:%M:%S")
   end
 
@@ -110,8 +127,8 @@ module RunsHelper
     @sentry_links ||= Observability::SentryLinks.from_env
   end
 
-  def sentry_trace_url(run, trace_id)
-    sentry_links.trace_url(trace_id, at: run.started_at || run.created_at)
+  def sentry_trace_url(trace)
+    sentry_links.trace_url(trace.id, at: trace.at)
   end
 
   def sentry_conversation_url(run)

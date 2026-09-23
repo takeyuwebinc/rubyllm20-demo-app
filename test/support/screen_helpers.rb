@@ -220,4 +220,37 @@ module ScreenHelpers
     run.await_approval!(ToolApproval::AnswerRefundRequest::RefundAgent.find(chat.id))
     run
   end
+
+  # A run of the ticket classification whose batch OpenAI accepted, as the
+  # last check found it. A batch never checked keeps only what the
+  # submission returned.
+  def create_batch_run(raw_status: "in_progress", request_counts: { "total" => 2, "completed" => 1, "failed" => 0 }, checked: true)
+    run = create_run(scenario_key: "classify_tickets", input: { "tickets" => "荷物が届かない。\n\n返品したい。" }, started_at: Time.current)
+    run.keep_remote_job!(batch_state("validating", { "total" => 0, "completed" => 0, "failed" => 0 }))
+    run.record_remote_check!(batch_state(raw_status, request_counts)) if checked
+    run
+  end
+
+  def batch_state(raw_status, request_counts)
+    Demos::Scenario::RemoteState.new(
+      kind: "batch", id: "batch_69d2", provider: "openai", status: :pending, raw_status: raw_status, request_counts: request_counts
+    )
+  end
+
+  # The result of collecting a batch of the given tickets, each given as
+  # [text, status, category, reason].
+  def batch_result(tickets, raw_status: "completed", model: "gpt-5-nano-2025-08-07")
+    {
+      "batch_id" => "batch_69d2",
+      "provider" => "openai",
+      "raw_status" => raw_status,
+      "request_counts" => {
+        "total" => tickets.size,
+        "completed" => tickets.count { |ticket| ticket[1] == "succeeded" },
+        "failed" => tickets.count { |ticket| ticket[1] == "failed" }
+      },
+      "model" => model,
+      "tickets" => tickets.map { |text, status, category, reason| { "text" => text, "status" => status, "category" => category, "reason" => reason } }
+    }
+  end
 end

@@ -20,17 +20,26 @@
 # chat if it stopped once more.
 #
 # An action that leaves work with the provider, such as a video that takes
-# minutes to generate or a research job, returns what RubyLLM returned for
-# it, such as the VideoJob of RubyLLM.animate_later or the ResearchJob of
-# RubyLLM.research_later: anything with id and pending?. It keeps no record
-# of the id itself, so that it stays plain RubyLLM code with nothing of the
-# run in it. The job that runs the action keeps the id with the run right
-# away, then calls .resume(id, **models), which waits for the work to
-# finish and returns a result, or raises. A job that runs again after it
-# was stopped calls .resume with the kept id instead of #perform, so the
-# work is neither left nor paid for twice. When waiting fails in a way that
-# may pass, the job tries .resume again later; .resume only lets the error
-# propagate.
+# minutes to generate, a research job, or a batch that takes hours, returns
+# what RubyLLM returned for it, such as the VideoJob of RubyLLM.animate_later,
+# the ResearchJob of RubyLLM.research_later, or the Batch of RubyLLM.batch:
+# anything with id and status. It keeps no record of the id itself, so that
+# it stays plain RubyLLM code with nothing of the run in it. The job that
+# runs the action keeps the id with the run right away.
+#
+# Work that ends within minutes to a couple of hours is waited for: the
+# action's class has .resume(id, **models), which waits for the work to
+# finish and returns a result, or raises, and the job calls it right after
+# keeping the id. A job that runs again after it was stopped calls .resume
+# with the kept id instead of #perform, so the work is neither left nor paid
+# for twice. When waiting fails in a way that may pass, the job tries
+# .resume again later; .resume only lets the error propagate.
+#
+# Work that may take a day, such as a batch, is checked on instead: the
+# action's class also has .check(id), which asks the provider how the work
+# is doing and returns it again, and its .resume(id) collects the work once
+# it has ended, however it ended, and returns the result. A job calls
+# .check every minute until the work ends, and then .resume.
 class ApplicationAction
   def self.perform(...)
     new(...).perform

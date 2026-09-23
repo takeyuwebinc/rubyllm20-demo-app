@@ -11,7 +11,7 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
       assert_select "*", text: /推論、ツール、プロバイダー側のツール/
       assert_select "[data-availability]", text: "実行できる"
     end
-    assert_select "[data-demo='batches'] [data-availability]", text: "準備中"
+    assert_select "[data-demo='batches'] [data-availability]", text: "実行できる"
   end
 
   test "names the missing provider in the list" do
@@ -480,25 +480,58 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
     end
   end
 
-  test "shows a scenario being prepared without code or input" do
-    get demo_path("batches")
+  test "shows the batch classification as runnable with its explanation, sources, code, and default tickets" do
+    with_openai_key("sk-test") { get root_path }
 
+    assert_select "[data-demo='batches'] [data-availability]", text: "実行できる"
+
+    with_openai_key("sk-test") { get demo_path("batches") }
+
+    assert_select "h2", text: "役立つケース"
+    assert_select "*", text: /別のプロセスが RubyLLM::Batch\.find で復元/
+    assert_select "h2", text: "使わない場合に困ること"
+    assert_select "*", text: /JSONL の組み立て/
+    assert_select "a[href='https://rubyllm.com/batches/'][target='_blank']"
+    assert_select "a[href='https://rubyllm.com/whats-new-in-2-0/#batch-processing'][target='_blank']"
+    assert_select "a[href='https://rubyllm.com/instrumentation/#workflows-and-steps'][target='_blank']"
+    assert_select "a[href='https://developers.openai.com/api/docs/guides/batch'][target='_blank']"
+    assert_select "a[href='https://developers.openai.com/api/docs/pricing'][target='_blank']"
     assert_select "#classify_tickets" do
+      assert_select "pre code", text: /ask_later\(ticket\)/
+      assert_select "pre code", text: /RubyLLM\.batch\(chats\)/
+      assert_select "textarea[name='run[input][tickets]']", text: /D-40518/
+      assert_select "textarea[name='run[input][tickets]']", text: /メールアドレスを変更したい/
+      assert_select "input[type=submit][value='実行する']:not([disabled])"
+    end
+  end
+
+  test "keeps the batch classification from running without OpenAI settings" do
+    with_openai_key(nil) { get root_path }
+
+    assert_select "[data-demo='batches'] [data-availability]", text: "設定値が足りない（OpenAI）"
+
+    with_openai_key(nil) { get demo_path("batches") }
+
+    assert_select "#classify_tickets [data-availability]", text: "設定値が足りない（OpenAI）"
+    assert_select "#classify_tickets input[type=submit][value='実行する'][disabled]"
+  end
+
+  # Every demo of the catalog can run, so a demo whose scenario has no
+  # handler yet is made up for this.
+  test "shows a scenario being prepared without code or input" do
+    preparing = Demos::Catalog.build([ {
+      "key" => "preparing-demo", "name" => "準備中のデモ", "summary" => "まだ動かないデモ", "sources" => [],
+      "scenarios" => [ { "key" => "not_yet", "name" => "準備中の代表シナリオ" } ]
+    } ])
+
+    with_demos(preparing) { get demo_path("preparing-demo") }
+
+    assert_select "#not_yet" do
       assert_select "*", text: /準備中/
       assert_select "pre", count: 0
       assert_select "textarea", count: 0
       assert_select "input[type=submit]", count: 0
     end
-  end
-
-  # TODO(once every demo has its explanation): remove this test, which then
-  # has no demo left to show it on.
-  test "says the explanation comes with the scenario when a demo has none yet" do
-    get demo_path("batches")
-
-    assert_select "h2", text: "役立つケース", count: 0
-    assert_select "*", text: /すぐに応答を返す必要がない/
-    assert_select "a[href='https://rubyllm.com/batches/']"
   end
 
   test "links each document of a scenario before its inputs, in a new tab, in the order of the definition" do
