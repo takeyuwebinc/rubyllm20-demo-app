@@ -82,9 +82,10 @@ module Demos
     # Checks on the work outside any workflow: a check every minute, for as
     # long as a day, would otherwise leave a trace each time. The work is
     # collected, inside the workflow, once it has ended, however it ended:
-    # an expired or cancelled batch keeps, and bills, the part the provider
-    # finished. The trace of a collection is recorded only once it got
-    # through, as a failed one is tried again a minute later.
+    # an expired or cancelled batch keeps the part the provider finished,
+    # and an expired one bills it. The trace of a collection is recorded
+    # only once it got through, as a failed one is tried again a minute
+    # later.
     #
     # Only a handler that has .check leaves work that ends on its own time.
     def continue_remote_job(run, scenario)

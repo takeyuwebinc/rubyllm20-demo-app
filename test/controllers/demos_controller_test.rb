@@ -237,6 +237,42 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
     assert_select "#count_tokens input[type=submit][value='実行する'][disabled]"
   end
 
+  test "shows the batch classification as runnable with its explanation, sources, code, and default tickets" do
+    with_openai_key("sk-test") { get root_path }
+
+    assert_select "[data-demo='batches'] [data-availability]", text: "実行できる"
+
+    with_openai_key("sk-test") { get demo_path("batches") }
+
+    assert_select "h2", text: "役立つケース"
+    assert_select "*", text: /別のプロセスが RubyLLM::Batch\.find で復元/
+    assert_select "h2", text: "使わない場合に困ること"
+    assert_select "*", text: /JSONL の組み立て/
+    assert_select "a[href='https://rubyllm.com/batches/'][target='_blank']"
+    assert_select "a[href='https://rubyllm.com/whats-new-in-2-0/#batch-processing'][target='_blank']"
+    assert_select "a[href='https://rubyllm.com/instrumentation/#workflows-and-steps'][target='_blank']"
+    assert_select "a[href='https://developers.openai.com/api/docs/guides/batch'][target='_blank']"
+    assert_select "a[href='https://developers.openai.com/api/docs/pricing'][target='_blank']"
+    assert_select "#classify_tickets" do
+      assert_select "pre code", text: /ask_later\(ticket\)/
+      assert_select "pre code", text: /RubyLLM\.batch\(chats\)/
+      assert_select "textarea[name='run[input][tickets]']", text: /D-40518/
+      assert_select "textarea[name='run[input][tickets]']", text: /ギフト用の包装/
+      assert_select "input[type=submit][value='実行する']:not([disabled])"
+    end
+  end
+
+  test "keeps the batch classification from running without OpenAI settings" do
+    with_openai_key(nil) { get root_path }
+
+    assert_select "[data-demo='batches'] [data-availability]", text: "設定値が足りない（OpenAI）"
+
+    with_openai_key(nil) { get demo_path("batches") }
+
+    assert_select "#classify_tickets [data-availability]", text: "設定値が足りない（OpenAI）"
+    assert_select "#classify_tickets input[type=submit][value='実行する'][disabled]"
+  end
+
   test "shows a scenario being prepared without code or input" do
     get demo_path("citations")
 

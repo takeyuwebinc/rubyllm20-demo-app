@@ -162,6 +162,32 @@ module Demos
       assert_select "#count_tokens [data-input-error='question']", text: "入力してください"
     end
 
+    test "records a batch classification run with its tickets exactly as sent, and queues it" do
+      tickets = "荷物が届かない。\r\n\r\n  返品したい。\r\n"
+
+      assert_difference(-> { Run.count }) do
+        with_openai_key("sk-test") do
+          post demo_runs_path("batches"), params: { run: { scenario_key: "classify_tickets", input: { tickets: tickets } } }
+        end
+      end
+
+      run = Run.last
+      assert_redirected_to run_path(run)
+      assert_equal({ "tickets" => tickets }, run.input)
+      assert_enqueued_with(job: RunJob, args: [ run ])
+    end
+
+    test "refuses a batch classification without any ticket" do
+      assert_no_difference(-> { Run.count }) do
+        with_openai_key("sk-test") do
+          post demo_runs_path("batches"), params: { run: { scenario_key: "classify_tickets", input: { tickets: " \n\n " } } }
+        end
+      end
+
+      assert_response :unprocessable_entity
+      assert_select "#classify_tickets [data-input-error='tickets']", text: "入力してください"
+    end
+
     test "says in the scenario why it cannot run any more" do
       assert_no_difference(-> { Run.count }) do
         with_openai_key(nil) do

@@ -81,7 +81,7 @@ module FailureKinds
   # cancelled there.
   REMOTE_JOB_CANCELLED = Kind.new(
     "プロバイダー側の処理の取り消し",
-    "OpenAI のダッシュボードなどでバッチが取り消された。完了した分は課金され、結果に残る"
+    "OpenAI のダッシュボードなどでバッチが取り消された。取り消す前に完了した分は結果に残る"
   )
 
   # Returns the Kind for +error+, or nil when the table does not know it.

@@ -66,7 +66,7 @@ class FailureKindsTest < ActiveSupport::TestCase
   test "describes work that was cancelled at the provider" do
     assert_equal "プロバイダー側の処理の取り消し", FailureKinds::REMOTE_JOB_CANCELLED.name
     assert_match "取り消された", FailureKinds::REMOTE_JOB_CANCELLED.hint
-    assert_match "完了した分は課金され", FailureKinds::REMOTE_JOB_CANCELLED.hint
+    assert_match "完了した分は結果に残る", FailureKinds::REMOTE_JOB_CANCELLED.hint
   end
 
   test "keeps the kinds for work ended at the provider out of the table of errors" do

@@ -1,0 +1,31 @@
+<%# The work a run left with a provider, such as a batch, as the last check found it. It stays on the page once the run
+    has ended, so the history shows which batch the result came from. %>
+<% remote_job = run.remote_job %>
+<% check_failure = remote_job["check_failure"] %>
+<section data-remote-job class="max-w-prose space-y-3 rounded-md border border-gray-200 bg-gray-50 p-4">
+  <h2 class="font-semibold text-gray-900">プロバイダーに投入済み</h2>
+  <dl class="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-sm">
+    <dt class="text-gray-500">バッチ ID</dt>
+    <dd data-remote-job-id class="break-all font-mono text-gray-900"><%= remote_job["id"] %></dd>
+    <dt class="text-gray-500">プロバイダー</dt>
+    <dd class="text-gray-800"><%= Demos.provider_name(remote_job["provider"]) %></dd>
+    <dt class="text-gray-500">プロバイダーの状態</dt>
+    <dd data-remote-job-status class="font-mono text-gray-900"><%= remote_job["raw_status"] %></dd>
+    <dt class="text-gray-500">件数</dt>
+    <dd data-remote-job-counts class="text-gray-800"><%= request_counts_text(remote_job["request_counts"]) %></dd>
+    <dt class="text-gray-500">投入日時</dt>
+    <dd data-remote-job-submitted-at class="text-gray-800"><%= format_time(remote_job["submitted_at"]) %></dd>
+    <dt class="text-gray-500">最後に確かめた日時</dt>
+    <dd data-remote-job-checked-at class="text-gray-800"><%= format_time(remote_job["checked_at"]) || "未確認" %></dd>
+  </dl>
+  <% if check_failure %>
+    <p data-remote-job-check-failure class="text-sm text-red-700">
+      最後の確認はプロバイダーに届かなかった（<%= format_time(check_failure["at"]) %>）: <%= check_failure["kind"] %>。<%= check_failure["message"] %>
+    </p>
+  <% end %>
+  <% if run.running? %>
+    <p data-remote-job-next-check class="text-sm text-gray-600">
+      次の確認は約 <%= Demos::RunJob::CHECK_INTERVAL.in_minutes.round %> 分後。処理が終わると結果を回収する。画面を離れても、結果は履歴に届く。
+    </p>
+  <% end %>
+</section>

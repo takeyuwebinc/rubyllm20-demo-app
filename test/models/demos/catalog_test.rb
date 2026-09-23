@@ -128,6 +128,19 @@ module Demos
       assert_equal 128_000, model.max_output_tokens
     end
 
+    test "classifies tickets in a batch with OpenAI, and never submits them twice when its job runs again" do
+      scenario = Catalog.scenario("classify_tickets")
+
+      assert_equal Batches::ClassifyTickets, scenario.handler
+      assert_equal %w[openai], scenario.providers
+      assert_equal({ "model" => "gpt-5-nano" }, scenario.models)
+      assert_equal %w[tickets], scenario.inputs.map(&:name)
+      assert scenario.inputs.sole.required
+      assert_equal 5, scenario.inputs.sole.default.split(/\n\n/).size
+      assert_equal "batch_classification", scenario.result_kind
+      assert_equal false, scenario.retryable
+    end
+
     test "keeps the text tokenization scenario in preparation" do
       assert_not Catalog.scenario("tokenize_text").implemented?
     end

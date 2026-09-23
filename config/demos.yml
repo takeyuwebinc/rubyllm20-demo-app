@@ -108,12 +108,62 @@
 - key: batches
   name: Batches
   summary: チケットの分類や要約のように、すぐに応答を返す必要がない、件数の多い処理を行いたい
+  useful_cases: |-
+    チケットの分類や要約のように、すぐに応答を返す必要がなく、件数の多い処理に役立つ。`ask_later` で質問を控えた会話を `RubyLLM.batch` にまとめて渡すと、1 回の投入になり、`RubyLLM::Batch` が返る。投入の単位は 1 つのプロバイダーで、OpenAI では 1 つのモデルに限られる。会話の指示文とスキーマ（`with_schema`）は、それぞれの要求に載る。
+
+    返ったバッチの `id` を保存しておけば、別のプロセスが `RubyLLM::Batch.find` で復元し、`refresh` で状態を取り直し、処理が終わった後に `messages` で回答を回収できる。`status` は `:pending`、`:succeeded`、`:failed`、`:cancelled` に正規化した状態、`raw_status` はプロバイダーの状態の文字列である。`statuses` は投入順の要求ごとの成否で、`messages` の後に埋まる。失敗した要求の回答は `nil` になり、その理由は RubyLLM のログ（このアプリでは `bin/dev` の端末）に出る。
+
+    OpenAI のバッチは 24 時間以内に処理され、料金は同期の呼び出しの半額で、レート制限の枠も別である。24 時間以内に終わらなかったバッチは期限切れ（`expired`）になり、未処理の要求は取り消されるが、完了した分の回答は残り、課金される。取り消したバッチでも、取り消す前に完了した分の回答は残る。このデモは、期限切れと取り消しのバッチも回収し、完了した分の結果を、失敗や取り消しの理由と並べて表示する。
+
+    Rails では、会話の記録（`acts_as_chat`）を投入すると、RubyLLM がバッチを自分のテーブルに保存する。`Batch.find` は ID だけで復元でき、回収した回答は各会話の記録に 1 度だけ追加される。回収をやり直しても、回答は重複しない。
+
+    コストは `batch.cost` と回答ごとの `cost` で読め、バッチの料金で求められる。RubyLLM のモデルの登録簿にバッチの単価がないモデル（`gpt-5-nano` など）では、OpenAI の標準の単価の半額で求める。回収では、回答ごとに使用量のイベント（`usage.ruby_llm`）だけが発行され、chat のイベントは発行されない。このアプリはそのイベントを chat のスパンとして Sentry に送るので、チケットごとのトークン数とコストは Sentry に載るが、プロンプトと回答の本文と、回答ごとの所要時間は載らない。本文は実行の画面で読む。
+
+    このデモのジョブは、投入の後に 1 分ごとの確認を予約する。確認は計装しない（計装すると 1 分ごとにトレースが増える）ので、Sentry には投入と回収の 2 つのトレースが、同じ会話として載る。公式ガイドは、別のジョブで回収するときに、保存した workflow の ID で `RubyLLM.workflow` を開き直して相関させる例を示している。このアプリは、workflow の metadata に渡す会話 ID で相関させる。確認の予約はデータベースに残るので、アプリを止めているあいだに完了したバッチも、次に起動した後の確認で回収される。
+
+    バッチの結果は 1 回のモデルの応答である。ツール呼び出しを含む応答では、`run_tools` でツールを実行した後に、次のバッチを投入する。
+  without_it: |-
+    同期の呼び出しで 1 件ずつ送ると、件数分の時間とレート制限の枠を使い、料金は標準のままである。
+
+    Batch API を直接使うと、JSONL の組み立て、ファイルのアップロード、バッチの作成、状態の確認、結果ファイルと失敗ファイルの取得、`custom_id` による回答と要求の対応づけ、失敗した行の切り分けを、自分で書いて保守することになる。プロバイダーを替えると、ファイルで投入する形（OpenAI）と要求の配列で投入する形（Anthropic）のように、投入の形も変わる。
   sources:
-    - title: Batches（RubyLLM）
+    - title: Batches（RubyLLM）— Submitting a Batch、Collecting the Answers、Cost and Usage、Rails Integration
       url: https://rubyllm.com/batches/
+    - title: What's New in 2.0（RubyLLM）— Batch Processing
+      url: https://rubyllm.com/whats-new-in-2-0/#batch-processing
+    - title: Instrumentation and Observability（RubyLLM）— Workflows and Steps
+      url: https://rubyllm.com/instrumentation/#workflows-and-steps
+    - title: Batch API（OpenAI）
+      url: https://developers.openai.com/api/docs/guides/batch
+    - title: Pricing（OpenAI）— Batch
+      url: https://developers.openai.com/api/docs/pricing
   scenarios:
     - key: classify_tickets
       name: サポートチケットをまとめて分類する
+      handler: Batches::ClassifyTickets
+      providers: [openai]
+      # A model sent through the Responses API, whose batches OpenAI accepts
+      # at /v1/responses.
+      models:
+        model: gpt-5-nano
+      inputs:
+        - name: tickets
+          label: サポートチケット（1 件ごとに空行で区切る）
+          required: true
+          default: |-
+            3 日前に注文した電気ケトル（注文番号 D-40518）がまだ届きません。配送状況を確認できますか。
+
+            届いたハンドミキサーのサイズが思っていたより大きかったので、未開封のまま返品して返金してほしいです。
+
+            先週届いたドライヤーが、使い始めて 2 日で電源が入らなくなりました。
+
+            注文番号 D-40533 の代金が、クレジットカードに 2 回請求されています。
+
+            誕生日のプレゼントにしたいのですが、ギフト用の包装とメッセージカードはお願いできますか。
+      result_kind: batch_classification
+      # Starting over would submit the same tickets again and pay for them
+      # twice. A job that runs again goes on from the batch the run keeps.
+      retryable: false
 
 - key: model-fallbacks
   name: Model Fallbacks
