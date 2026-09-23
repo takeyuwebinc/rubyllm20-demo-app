@@ -138,7 +138,25 @@ module Observability
       attributes.merge!(usage_attributes(payload[:tokens], payload[:cost]))
       attributes.merge!(chat_attributes(payload)) if name == "chat.ruby_llm"
       attributes.merge!(speech_attributes(payload)) if name == "speech.ruby_llm"
+      attributes.merge!(tokenization_attributes(payload)) if name == "tokenization.ruby_llm"
       attributes
+    end
+
+    # The count comes from the Tokenization that RubyLLM adds to the payload
+    # as the result once the provider answers. Only the gem's source shows it
+    # there; the Instrumentation guide does not list the event. A result
+    # without a count adds nothing, so that a change in its shape costs this
+    # one attribute rather than all of the span's.
+    #
+    # The count is kept out of gen_ai.usage: Sentry would estimate a cost from
+    # it, and tokenizing is not billed as usage. It is no content, so it is
+    # sent whether content is captured or not. The text itself is not in the
+    # payload.
+    def tokenization_attributes(payload)
+      result = payload[:result]
+      return {} unless result.respond_to?(:count)
+
+      { "ruby_llm.tokenization.count" => result.count }
     end
 
     # The voice and format are the ones the provider used once it answered,

@@ -447,6 +447,59 @@ module Observability
       assert_equal "mp3", speech.attributes["ruby_llm.speech.format"], "the format asked for"
     end
 
+    test "counts the tokens of a tokenized text, beside the attributes of other operations" do
+      workflow = { workflow_name: "Demos::RunJob", workflow_id: "run-1", workflow_metadata: { conversation_id: "run-abc" } }
+
+      instrument("workflow.ruby_llm", workflow) do
+        instrument("tokenization.ruby_llm", tokenization_payload(**workflow)) { |payload| payload[:result] = tokenization(count: 58) }
+      end
+
+      attributes = span("tokenization grok-4.3").attributes
+
+      assert_equal 58, attributes["ruby_llm.tokenization.count"]
+      assert_equal "tokenization", attributes["ruby_llm.operation"]
+      assert_equal "xai", attributes["gen_ai.provider.name"]
+      assert_equal "grok-4.3", attributes["gen_ai.request.model"]
+      assert_equal "Demos::RunJob", attributes["gen_ai.agent.name"]
+      assert_equal "run-abc", attributes["gen_ai.conversation.id"]
+      assert_not_includes attributes.keys, "sentry.op"
+      assert_empty attributes.keys.grep(/\Agen_ai\.(usage|cost)\./)
+    end
+
+    test "marks a failed tokenization as failed, without a token count" do
+      assert_raises(RubyLLM::BadRequestError) do
+        instrument("tokenization.ruby_llm", tokenization_payload) { raise RubyLLM::BadRequestError.new("Bad data: Text cannot be empty") }
+      end
+
+      tokenization = span("tokenization grok-4.3")
+
+      assert_equal OpenTelemetry::Trace::Status::ERROR, tokenization.status.code
+      assert_equal "RubyLLM::BadRequestError", tokenization.attributes["error.type"]
+      assert_equal "Bad data: Text cannot be empty", tokenization.attributes["error.message"]
+      assert_not_includes tokenization.attributes.keys, "ruby_llm.tokenization.count"
+      assert_equal "xai", tokenization.attributes["gen_ai.provider.name"]
+    end
+
+    test "leaves the token count out of a tokenization whose result has no count, and keeps the other attributes" do
+      instrument("tokenization.ruby_llm", tokenization_payload) { |payload| payload[:result] = Object.new }
+
+      attributes = span("tokenization grok-4.3").attributes
+
+      assert_not_includes attributes.keys, "ruby_llm.tokenization.count"
+      assert_equal "tokenization", attributes["ruby_llm.operation"]
+      assert_equal "xai", attributes["gen_ai.provider.name"]
+      assert_equal "grok-4.3", attributes["gen_ai.request.model"]
+    end
+
+    test "counts the tokens of a tokenized text when content capture is off" do
+      ActiveSupport::Notifications.unsubscribe(@subscription)
+      @subscription = ActiveSupport::Notifications.subscribe(/\.ruby_llm\z/, RubyLLMSpanSubscriber.new(tracer: @provider.tracer("test"), capture_content: false))
+
+      instrument("tokenization.ruby_llm", tokenization_payload) { |payload| payload[:result] = tokenization(count: 3) }
+
+      assert_equal 3, span("tokenization grok-4.3").attributes["ruby_llm.tokenization.count"]
+    end
+
     test "ignores events that are not model work" do
       instrument("models.refresh.ruby_llm", remote_only: true)
 
@@ -511,6 +564,16 @@ module Observability
 
     def complete_speech(payload)
       payload.merge!(response_model: "gpt-4o-mini-tts", voice: "marin", format: "mp3", audio_bytes: 48_000)
+    end
+
+    # What RubyLLM.tokenize instruments before the provider answers: the
+    # model and the provider, without the text.
+    def tokenization_payload(**overrides)
+      { model: "grok-4.3", provider: :xai }.merge(overrides)
+    end
+
+    def tokenization(count:)
+      RubyLLM::Tokenization.new(ids: Array.new(count) { |index| 1000 + index }, model: "grok-4.3")
     end
 
     def complete(payload, tokens: RubyLLM::Tokens.new(input: 13, output: 75), cost: 0.00003, response: nil)
