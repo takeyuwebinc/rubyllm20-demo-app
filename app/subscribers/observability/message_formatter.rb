@@ -24,6 +24,9 @@ module Observability
       { type: "reasoning", content: text } if text.present?
     end
 
+    # Attachments are not parts: the message shape has no type for them, and
+    # a PDF would make a span tens of kilobytes. The run page links to the
+    # document it attached.
     def text_part(message)
       { type: "text", content: message.content.to_s } if message.content.present?
     end

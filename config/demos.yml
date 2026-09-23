@@ -6,8 +6,9 @@
 #
 # A scenario with no handler is being prepared. An implemented scenario lists
 # its providers (used to tell whether it can run), its models by the keyword
-# the handler takes, its inputs, how to show its result, and whether a job
-# that runs again may start it over (retryable). A scenario that submits work
+# the handler takes, its inputs, the documents it hands the handler (files
+# under public/, by the keyword the handler takes), how to show its result,
+# and whether a job that runs again may start it over (retryable). A scenario that submits work
 # to the provider, or does something that cannot be undone, is not retryable:
 # starting over would submit the work twice or do it again.
 #
@@ -52,12 +53,63 @@
 - key: citations
   name: Citations
   summary: 規約や契約のように、回答の根拠を読み手が検証する必要がある
+  useful_cases: |-
+    規約、契約、マニュアルのように、回答の根拠を読み手が確かめる必要がある場合に役立つ。`with_citations` を付けて、文書を `ask` の `with:` で添付すると、応答の `citations` に、回答のどの範囲（`text`、`start_index`、`end_index`）が文書のどの引用（`cited_text`）に基づくかが載る。PDF なら、引用のページ（`start_page`、`end_page`。1 始まりで、両端を含む）も載る。このデモでは、回答の該当する範囲の末尾に番号の印を入れ、出典の一覧から PDF のそのページを開けるようにしている。
+
+    文書の引用に対応するのは、Anthropic、Cohere、Bedrock（Converse）上の Claude である。Anthropic は、文書を文の単位に分け、その単位で引用する。PDF は本文を取り出して引用するので、本文を取り出せないスキャンだけの PDF と、画像は引用できない。
+
+    引用は API が文書から取り出すので、指し先は必ず文書の中にある。ただし、その引用が主張を支えているかどうかは、読み手が判断する。
+
+    `cited_text` は出力トークンに数えられない。一方、コストには文書のトークンが含まれる。PDF の各ページは、本文（1 ページあたり 1,500〜3,000 トークン）と画像の両方として処理され、両方が課金される。Anthropic では、文書の引用と `with_schema` を併用できない。
+
+    Rails では、出典はメッセージの記録の `citations` の列に残る。このアプリの Sentry には、問い合わせ文と回答の本文が載り、添付した文書と出典は載らない。出典は実行の画面で読む。
+  without_it: |-
+    プロンプトで「根拠を引用して」と頼む方法では、引用が文書に実在するかを照合する仕組みを自分で作ることになる。モデルが引用を書き換えたり作ったりしても、それを検出する仕組みがない。引用の文字数の分だけ、出力トークンもかかる。
+
+    ページや位置を知るには、文書を自分で分割して番号を付けて渡し、番号を返させる形式を決めて解析することになる。回答のどの文がどの引用に基づくかの対応づけも、出力の形式を決めて解析することになる。
   sources:
-    - title: Citations（RubyLLM）
+    - title: Citations（RubyLLM）— Citing Your Documents、The Citation Object、ActiveRecord Integration
       url: https://rubyllm.com/citations/
+    - title: What's New in 2.0（RubyLLM）— Citations
+      url: https://rubyllm.com/whats-new-in-2-0/#citations
+    - title: Citations（Anthropic）— 文書の種類、ページ番号、トークン
+      url: https://platform.claude.com/docs/en/build-with-claude/citations
+    - title: PDF support（Anthropic）— 上限と処理
+      url: https://platform.claude.com/docs/en/build-with-claude/pdf-support
   scenarios:
     - key: cite_return_policy
       name: 返品ポリシーに基づいて回答する
+      handler: Citations::AnswerFromReturnPolicy
+      providers: [anthropic]
+      # A model the registry lists with citations and with PDF input, the
+      # stronger one for quotes from a Japanese document, as cost is not
+      # capped. Should claude-sonnet-5 be refused, use the dated
+      # claude-haiku-4-5-20251001: the registry lists the alias
+      # claude-haiku-4-5 without citations, and RubyLLM then only warns.
+      models:
+        model: claude-sonnet-5
+      inputs:
+        - name: inquiry
+          label: 顧客からの問い合わせ文
+          required: true
+          # Asks about all three pages of the policy: whether and at whose
+          # cost (page 1), the replacement filter (page 2), the refund (page 3).
+          default: |-
+            2 週間前に届いた空気清浄機（注文番号 E-50712）を、まだ開封していませんが、部屋に合わないので返品したいです。返品できますか。返送の送料はどちらの負担になりますか。返金はいつ、どのような方法で受けられますか。また、同じ箱で届いた交換用のフィルター（未開封）も一緒に返品できますか。
+      # A PDF, because its pages are what a citation of a PDF adds: RubyLLM
+      # reads no position from a citation of a text document. A fixed one,
+      # made once from its HTML, so that no PDF gem or font comes into the
+      # app and the code shown stays RubyLLM's, and so that its pages and
+      # quotes stay the same from run to run. Remaking it leaves the sources
+      # of earlier runs pointing at pages that have changed.
+      documents:
+        - name: policy
+          label: 返品ポリシー文書（PDF、3 ページ）
+          path: documents/return-policy.pdf
+      result_kind: cited_answer
+      # Starting over asks again, and is billed again, but leaves nothing
+      # half done.
+      retryable: true
 
 - key: tool-approval
   name: Tool Approval

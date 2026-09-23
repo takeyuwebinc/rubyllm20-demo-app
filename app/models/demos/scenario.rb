@@ -2,9 +2,27 @@ module Demos
   # A representative scenario of a demo: one case where the feature helps,
   # runnable against a real provider once it has a handler.
   class Scenario < Data.define(
-    :key, :demo_key, :name, :providers, :models, :inputs, :handler_name, :result_kind, :retryable
+    :key, :demo_key, :name, :providers, :models, :inputs, :documents, :handler_name, :result_kind, :retryable
   )
     Input = Data.define(:name, :label, :default, :required)
+
+    # A file the scenario hands its handler, such as a policy to cite. It is
+    # kept under public/, path relative to it, so that a page can link to
+    # the very file the handler is given.
+    Document = Data.define(:name, :label, :path) do
+      # public/ is served from the root.
+      def url
+        "/" + path.split("/").map { |segment| ERB::Util.url_encode(segment) }.join("/")
+      end
+
+      def absolute_path
+        Rails.public_path.join(path)
+      end
+
+      def filename
+        File.basename(path)
+      end
+    end
 
     # :runnable, :missing_config (with the providers that lack settings), or
     # :preparing (no handler yet).
@@ -57,10 +75,12 @@ module Demos
       File.read(Rails.root.join(source_path))
     end
 
-    # Calls the handler with each input and each model as a keyword, so the
-    # handler reads like ordinary RubyLLM code with nothing of this app in it.
+    # Calls the handler with each input, each model, and the path of each
+    # document as a keyword, so the handler reads like ordinary RubyLLM code
+    # with nothing of this app in it: it passes a path on without knowing
+    # where the file lives.
     def perform(input)
-      handler.perform(**input_values(input).symbolize_keys, **models.symbolize_keys)
+      handler.perform(**input_values(input).symbolize_keys, **models.symbolize_keys, **document_paths)
     end
 
     # Records a person's decision on a tool call of the run's chat. Only a
@@ -75,6 +95,10 @@ module Demos
     end
 
     private
+
+    def document_paths
+      documents.to_h { |document| [ document.name.to_sym, document.absolute_path ] }
+    end
 
     # Only the names of the required settings are public in RubyLLM 2.0.0;
     # the provider's own configured? check is not. The names come from

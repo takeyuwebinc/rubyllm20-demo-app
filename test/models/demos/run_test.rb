@@ -357,6 +357,7 @@ module Demos
         providers: [],
         models: {},
         inputs: [ Scenario::Input.new(name: "inquiry", label: "問い合わせ", default: "Hi", required: true) ],
+        documents: [],
         handler_name: "Object",
         result_kind: "text_answer",
         retryable: true,

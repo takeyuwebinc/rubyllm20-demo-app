@@ -199,6 +199,42 @@ module Demos
       assert_select "#count_tokens [data-input-error='question']", text: "入力してください"
     end
 
+    test "records a run that answers from the return policy with its inquiry, and queues it" do
+      assert_difference(-> { Run.count }) do
+        with_anthropic_key("sk-ant-test") do
+          post demo_runs_path("citations"), params: { run: { scenario_key: "cite_return_policy", input: { inquiry: "返品できますか。", policy: "/etc/passwd" } } }
+        end
+      end
+
+      run = Run.last
+      assert_redirected_to run_path(run)
+      assert_equal({ "inquiry" => "返品できますか。" }, run.input)
+      assert_enqueued_with(job: RunJob, args: [ run ])
+    end
+
+    test "refuses a blank inquiry for the answer from the return policy" do
+      assert_no_difference(-> { Run.count }) do
+        with_anthropic_key("sk-ant-test") do
+          post demo_runs_path("citations"), params: { run: { scenario_key: "cite_return_policy", input: { inquiry: " \n" } } }
+        end
+      end
+
+      assert_response :unprocessable_entity
+      assert_select "#cite_return_policy [data-input-error='inquiry']", text: "入力してください"
+    end
+
+    test "drops a value sent under the name of a document, keeping only the inputs" do
+      with_demos(demos_with_documents(TWO_DOCUMENTS)) do
+        assert_difference(-> { Run.count }) do
+          with_openai_key("sk-test") do
+            post demo_runs_path("documents-demo"), params: { run: { scenario_key: "answer_from_documents", input: { inquiry: "返品できますか", policy: "/etc/passwd" } } }
+          end
+        end
+      end
+
+      assert_equal({ "inquiry" => "返品できますか" }, Run.last.input)
+    end
+
     test "records a fallback run with its inquiry and queues it" do
       assert_difference(-> { Run.count }) do
         with_openai_key("sk-test") do
