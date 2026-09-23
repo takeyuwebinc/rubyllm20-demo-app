@@ -138,6 +138,7 @@ module Observability
       attributes.merge!(usage_attributes(payload[:tokens], payload[:cost]))
       attributes.merge!(chat_attributes(payload)) if name == "chat.ruby_llm"
       attributes.merge!(speech_attributes(payload)) if name == "speech.ruby_llm"
+      attributes.merge!(research_job_attributes(payload)) if name == "research_job.ruby_llm"
       attributes
     end
 
@@ -151,11 +152,30 @@ module Observability
         "ruby_llm.speech.format" => payload[:format]&.to_s,
         "ruby_llm.speech.audio_bytes" => payload[:audio_bytes]&.to_i
       }
-      if @capture_content
-        input = RubyLLM::Message.new(role: :user, content: payload[:input].to_s)
-        attributes["gen_ai.input.messages"] = MessageFormatter.format([ input ]).presence&.to_json
-      end
+      attributes.merge!(input_attributes(payload[:input])) if @capture_content
       attributes
+    end
+
+    # A research job is submitted in this event and fetched later by
+    # requests that carry no event of their own, so the prompt is the one
+    # piece of content there is: it goes where a prompt goes. The job and
+    # its status are the ones the provider answered with, absent when the
+    # submission failed.
+    def research_job_attributes(payload)
+      attributes = {
+        "ruby_llm.research.agent" => payload[:agent]&.to_s,
+        "ruby_llm.research.job_id" => payload[:job_id]&.to_s,
+        "ruby_llm.research.status" => payload[:status]&.to_s
+      }
+      attributes.merge!(input_attributes(payload[:prompt])) if @capture_content
+      attributes
+    end
+
+    # Text sent as the user's input, in the shape of a conversation's input
+    # messages. Empty text is left out.
+    def input_attributes(text)
+      input = RubyLLM::Message.new(role: :user, content: text.to_s)
+      { "gen_ai.input.messages" => MessageFormatter.format([ input ]).presence&.to_json }
     end
 
     def chat_attributes(payload)
