@@ -1,0 +1,28 @@
+<%# Each token is framed, so that where one ends and the next begins can be seen, with its id beside it. Its string comes from the
+    provider: it keeps its spaces, tabs, and line breaks, and is escaped as any text. A token that ends partway through a
+    character has an empty string, and left empty it would look like no token at all. Its bytes are shown instead, as two-digit
+    lowercase hexadecimal in a dashed frame that marks it as a fragment. Every token is drawn, however long the text. %>
+<% result = run.result %>
+<% tokens = result["tokens"] %>
+<div data-tokenization class="space-y-4">
+  <dl class="grid max-w-prose grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-sm">
+    <dt class="text-gray-500">トークン数</dt>
+    <dd data-token-total class="font-medium text-gray-900"><%= number_with_delimiter(result["count"]) %></dd>
+    <dt class="text-gray-500">モデル</dt>
+    <dd data-tokenizer-model class="text-gray-800"><%= result["model"] %></dd>
+  </dl>
+
+  <% if tokens.any? { |token| token["string"].to_s.empty? } %>
+    <p data-fragment-legend class="max-w-prose text-sm text-gray-600">点線の枠は、文字の途中で割れたトークンである。文字列が空のため、バイト列を 16 進で示す。</p>
+  <% end %>
+
+  <ol class="flex flex-wrap gap-1.5">
+    <% tokens.each do |token| %>
+      <% if token["string"].to_s.empty? %>
+        <li data-token class="inline-flex items-baseline gap-1 rounded border border-dashed border-amber-600 bg-amber-50 px-1.5 py-0.5"><span data-token-fragment class="font-mono text-sm text-amber-900"><%= token["bytes"].map { |byte| format("%02x", byte) }.join(" ") %></span><span data-token-id class="text-xs text-gray-500"><%= token["id"] %></span></li>
+      <% else %>
+        <li data-token class="inline-flex items-baseline gap-1 rounded border border-gray-300 bg-white px-1.5 py-0.5"><span data-token-string class="whitespace-pre-wrap font-mono text-sm text-gray-900"><%= token["string"] %></span><span data-token-id class="text-xs text-gray-500"><%= token["id"] %></span></li>
+      <% end %>
+    <% end %>
+  </ol>
+</div>
