@@ -125,6 +125,14 @@ RubyLLM::RateLimitError: Quota exceeded for quota metric
 
 対処は、Google Cloud コンソールの「IAM と管理」→「割り当てとシステム上限」で、サービスを Vertex AI に絞り、`Stateful Interaction Creation requests per minute per project` の値を確認して、引き上げを申請する。
 
+2026-09-23 に F8 の代表シナリオを実装した時点の状況:
+
+- 投入の前に、ADC が失効していた（`RubyLLM::UnauthorizedError`、`invalid_grant` / `invalid_rapt`）。`gcloud auth application-default login` で作り直した後は、認証を通過した。`gcloud` CLI 自体のログイン（`gcloud auth login`）は ADC とは別に失効する。
+- 作り直した後、アプリの画面から既定の調査テーマで 2 回投入し（16:00 と、1 分以上空けた 16:02）、どちらも 2026-09-19 と同じクォータの超過で拒否された。ジョブは作成されず、費用も発生していない。実行は「レート制限」の失敗として画面に記録され、原因の候補にクォータが出る。
+- エラーの課金先（`consumer 'project_number:...'`）は、`.env` の `GOOGLE_CLOUD_PROJECT` のプロジェクト番号と一致した（Cloud Resource Manager API で確認）。ADC に `quota_project_id` は設定されていない。
+- Service Usage API の `consumerQuotaMetrics` で読める Vertex AI のクォータ（366 件）に、`stateful_interaction_creations` はなかった。近い指標の `concurrent_interaction_generations`（Concurrent interaction generations、2 時間あたり 10）は既定値のままで、利用者による上書きはない。コンソールで引き上げを申請した後も投入が拒否される場合は、申請した指標とプロジェクトがエラーの指標・課金先と一致しているかを確かめる。
+- 所要時間の実測、120 分の上限を超えた調査が返る状態、`budget_exceeded` が何の予算を指すか、Vertex AI で `cancel` が効くかは、投入が通らないため未確認である。
+
 ## 5. Sentry（観察情報用）
 
 観察情報（試行ごとのプロバイダー、モデル、トークン数、コスト、所要時間、送信先）と、プロンプトと応答の本文は、Sentry のエージェントトレーシングで確認する。モデルのプロバイダーではないが、全デモが使うため最初に用意する。既存の sentry.io の組織を使う。
@@ -199,13 +207,15 @@ Vertex AI  SKIP  GOOGLE_CLOUD_PROJECT が未設定
 - `bin/check_keys` の SKIP 経路、無効なキーでの NG 経路、有効な認証情報での OK 経路（4 プロバイダーとも、2026-09-19 に実リクエストで確認）。上の出力例のトークン数は例示
 - 失効した ADC では Vertex AI が `UnauthorizedError` になり、`gcloud auth application-default login` で解消すること（実リクエスト）
 - Deep Research のリクエストを受けるサービスが `aiplatform.googleapis.com` であること（クォータ超過のエラーメッセージに記載）
-- Deep Research のジョブの投入が、このプロジェクトではクォータの超過として拒否されること（実リクエスト）
+- Deep Research のジョブの投入が、このプロジェクトではクォータの超過として拒否されること（2026-09-19 と 2026-09-23 に実リクエスト）。拒否の課金先が `GOOGLE_CLOUD_PROJECT` のプロジェクトであること
+- 拒否された投入でも、Sentry のトレースに `research_job` のスパン（プロンプト、エージェント、エラーの種類）と `POST .../locations/global/interactions` の `http.client` のスパンが載ること（2026-09-23、Sentry の API で確認）
 - RubyLLM 2.0.0 が Rails 8.1.3.1 / Ruby 4.0.6 で起動すること
 
 確認できていないもの:
 
 - 各コンソールのログイン後の画面遷移（ボタン名やメニュー位置）。ログインが必要なため未確認。
-- Deep Research のクォータの上限値と、引き上げの申請が通るかどうか。
+- Deep Research のクォータの上限値と、引き上げの申請が通るかどうか。`stateful_interaction_creations` は Service Usage API のクォータの一覧に出ない。
+- Deep Research の所要時間、120 分の上限を超えた調査が返る状態、`budget_exceeded` の意味、`cancel` の効き（投入が通らないため）。
 - Sentry が表示するコストが、RubyLLM が算出して送った値か、Sentry 自身の推定かの区別。確認した会話ではどちらも 0.01 ドル未満で、表示から判別できなかった。バッチ料金のように両者が食い違う実行で確認する。
 - OpenAI の Organization 本人確認が必要になるモデルの範囲。
 
