@@ -1,0 +1,50 @@
+<%# The switch is what this demo is about, so it comes before the answer, which can be long enough to push it out of sight.
+    The result keeps each error's class name alone. Its kind is looked up in the failure kinds table when shown, so the name lives
+    in the table only; a class the table does not know is shown by its name. %>
+<% result = run.result %>
+<% fallbacks = result["fallbacks"] %>
+<div data-fallback-answer class="max-w-prose space-y-6">
+  <section>
+    <h2 class="text-base font-semibold text-gray-700">切り替えの経過</h2>
+    <dl class="mt-2 grid grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-sm">
+      <dt class="text-gray-500">応答したモデル</dt>
+      <dd data-answered-by class="font-medium text-gray-900"><%= result["model"] %></dd>
+      <dt class="text-gray-500">主モデル</dt>
+      <dd data-primary-model class="text-gray-800"><%= result["primary_model"] %></dd>
+      <dt class="text-gray-500">障害の再現に使った送信先</dt>
+      <dd data-primary-api-base class="break-all font-mono text-gray-800"><%= result["primary_api_base"] %></dd>
+    </dl>
+
+    <% if fallbacks.any? %>
+      <ol class="mt-4 space-y-3 text-sm">
+        <% fallbacks.each do |fallback| %>
+          <% kind = FailureKinds.for_class_name(fallback["error_class"]) %>
+          <li data-fallback class="space-y-2 rounded-md p-4 ring-1 ring-gray-200">
+            <p class="font-medium text-gray-900">
+              試行 <%= fallback["attempt"] %>:
+              <span data-fallback-from><%= Demos.provider_name(fallback.dig("from", "provider")) %> <%= fallback.dig("from", "model") %></span>
+              →
+              <span data-fallback-to><%= Demos.provider_name(fallback.dig("to", "provider")) %> <%= fallback.dig("to", "model") %></span>
+            </p>
+            <p class="text-gray-700">
+              きっかけ:
+              <% if kind %><span data-error-kind><%= kind.name %></span><% end %>
+              <code class="rounded bg-gray-100 px-1 py-0.5"><%= fallback["error_class"] %></code>
+            </p>
+            <p class="whitespace-pre-wrap break-words text-gray-700"><%= fallback["error_message"] %></p>
+            <p>
+              <span data-fallback-outcome class="inline-flex items-center rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset <%= fallback["succeeded"] ? "bg-green-50 text-green-700 ring-green-600/20" : "bg-red-50 text-red-700 ring-red-600/20" %>"><%= fallback["succeeded"] ? "予備モデルが応答した" : "予備モデルも失敗した" %></span>
+            </p>
+          </li>
+        <% end %>
+      </ol>
+    <% else %>
+      <p data-no-fallback class="mt-4 text-sm text-gray-500">切り替えは起きず、主モデルが応答した。</p>
+    <% end %>
+  </section>
+
+  <section data-answer>
+    <h2 class="text-base font-semibold text-gray-700">回答</h2>
+    <div class="mt-2 whitespace-pre-wrap break-words leading-relaxed text-gray-900"><%= result["answer"] %></div>
+  </section>
+</div>

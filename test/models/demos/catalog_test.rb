@@ -72,6 +72,20 @@ module Demos
       assert_equal "refund_decision", scenario.result_kind
     end
 
+    test "answers one inquiry with an OpenAI model that falls back to an Anthropic one, and starts over when its job runs again" do
+      scenario = Catalog.scenario("fall_back_to_another_provider")
+
+      assert_equal ModelFallbacks::AnswerWithFallback, scenario.handler
+      assert_equal %w[openai anthropic], scenario.providers
+      assert_equal "openai", RubyLLM.models.find(scenario.models.fetch("model")).provider
+      assert_equal "anthropic", RubyLLM.models.find(scenario.models.fetch("fallback_model")).provider
+      assert_equal %w[inquiry], scenario.inputs.map(&:name)
+      assert scenario.inputs.sole.required
+      assert_predicate scenario.inputs.sole.default, :present?
+      assert_equal "fallback_answer", scenario.result_kind
+      assert_equal true, scenario.retryable
+    end
+
     test "starts the web search over when its job runs again, from one question, on OpenAI" do
       scenario = Catalog.scenario("search_web")
 
@@ -83,11 +97,18 @@ module Demos
       assert_equal "web_search_answer", scenario.result_kind
     end
 
-    test "keeps the code execution of Provider Tools being prepared" do
+    test "starts the code execution over when its job runs again, from order data and a request, on OpenAI" do
       scenario = Catalog.scenario("run_code")
 
       assert_equal "provider-tools", scenario.demo.key
-      assert_not_predicate scenario, :implemented?
+      assert_equal ProviderTools::AnswerWithCodeExecution, scenario.handler
+      assert_equal %w[openai], scenario.providers
+      assert_equal({ "model" => "gpt-5-nano" }, scenario.models)
+      assert_equal true, scenario.retryable
+      assert_equal %w[orders request], scenario.inputs.map(&:name)
+      assert scenario.inputs.all?(&:required)
+      assert scenario.inputs.all? { |input| input.default.present? }
+      assert_equal "code_execution_answer", scenario.result_kind
     end
 
     test "reads the answer aloud with OpenAI from one required text, and starts over when its job runs again" do

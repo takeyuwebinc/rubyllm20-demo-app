@@ -484,6 +484,138 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
     assert response.body.start_with?("%PDF-")
   end
 
+  test "shows the code execution answer with each step's number, status, code, and printed output, the container, and the model" do
+    run = create_code_execution_run([
+      code_step("import pandas as pd\nprint(totals)", outputs: [ { "type" => "logs", "logs" => "キッチン家電    11460\n生活家電      28780\n" } ]),
+      code_step("print(refunds)", outputs: [ { "type" => "logs", "logs" => "2 11960\n" } ])
+    ])
+
+    get run_path(run)
+
+    assert_select "[data-code-execution-answer]" do
+      assert_select "h2" do |headings|
+        assert_equal %w[回答 実行されたコード], headings.map { |heading| heading.text.strip }
+      end
+      assert_select "*", text: "カテゴリごとの売上は、キッチン家電が 11,460 円です。"
+      assert_select "[data-step]", 2
+      assert_select "[data-step-number]" do |numbers|
+        assert_equal [ "ステップ 1", "ステップ 2" ], numbers.map { |number| number.text.strip }
+      end
+      assert_select "[data-step-status]", { text: "completed", count: 2 }
+      # Compared on the pre, since assert_select squeezes the whitespace of
+      # any other element's text.
+      assert_select "[data-step] pre:not([data-output])", text: "import pandas as pd\nprint(totals)" do
+        assert_select "code", 1
+      end
+      assert_select "[data-step] pre code", text: "print(refunds)"
+      assert_select "[data-output='logs']", text: "キッチン家電    11460\n生活家電      28780\n"
+      assert_select "[data-output='logs']", text: "2 11960\n"
+      assert_select "[data-container]", { text: "cntr_1", count: 1 }
+      assert_select "*", text: /gpt-5-nano-2025-08-07/
+      assert_select "*", text: "コードの実行なし", count: 0
+      assert_select "*", text: "出力なし", count: 0
+    end
+  end
+
+  test "shows code and outputs the container returned as text, and neither links nor shows the URL of an image output" do
+    run = create_code_execution_run([
+      code_step("print('<script>alert(1)</script>')", status: "<b>completed</b>", outputs: [
+        { "type" => "logs", "logs" => "<img src=x onerror=alert(2)>\n" },
+        { "type" => "image", "url" => "javascript:alert(3)" }
+      ])
+    ])
+
+    get run_path(run)
+
+    assert_select "[data-code-execution-answer]" do
+      assert_select "script", count: 0
+      assert_select "img", count: 0
+      assert_select "b", count: 0
+      assert_select "[data-step] pre code", text: "print('<script>alert(1)</script>')"
+      assert_select "[data-output='logs']", text: "<img src=x onerror=alert(2)>\n"
+      assert_select "[data-step-status]", text: "<b>completed</b>"
+      assert_select "[data-output='image']", text: "画像の出力（このアプリでは取得しない）"
+    end
+    assert_select "a[href^='javascript']", count: 0
+    assert_no_match(/alert\(3\)/, response.body)
+  end
+
+  test "says when the model ran no code, shows no container, and still shows the answer" do
+    run = create_code_execution_run([])
+
+    get run_path(run)
+
+    assert_select "[data-code-execution-answer]" do
+      assert_select "*", text: "カテゴリごとの売上は、キッチン家電が 11,460 円です。"
+      assert_select "*", text: "コードの実行なし"
+      assert_select "[data-step]", count: 0
+      assert_select "[data-container]", count: 0
+      assert_select "*", text: /コンテナ/, count: 0
+    end
+  end
+
+  test "says when a step printed nothing, and names image and unknown outputs without their content" do
+    run = create_code_execution_run([
+      code_step("x = 1", outputs: []),
+      code_step("plot()", outputs: [ { "type" => "image", "url" => "https://example.com/plot.png" }, { "type" => "files", "files" => [ { "name" => "a.csv" } ] } ])
+    ])
+
+    get run_path(run)
+
+    assert_select "[data-step]" do |steps|
+      assert_select steps.first, "*", text: "出力なし"
+      assert_select steps.first, "[data-output]", count: 0
+      assert_select steps.last, "[data-output='image']", text: "画像の出力（このアプリでは取得しない）"
+      assert_select steps.last, "[data-output='other']", text: "その他の出力（files）"
+      assert_select steps.last, "*", text: "出力なし", count: 0
+    end
+    assert_select "a[href='https://example.com/plot.png']", count: 0
+    assert_no_match %r{example\.com/plot\.png}, response.body
+    assert_no_match(/a\.csv/, response.body)
+  end
+
+  test "shows a step without code by its item type alone" do
+    run = create_code_execution_run([ code_step(nil, outputs: [ { "type" => "logs", "logs" => "hidden\n" } ]) ])
+
+    get run_path(run)
+
+    assert_select "[data-step]" do
+      assert_select "[data-step-type]", text: "code_interpreter_call"
+      assert_select "pre", count: 0
+      assert_select "[data-output]", count: 0
+      assert_select "*", text: "出力なし", count: 0
+    end
+  end
+
+  test "shows a step's status only when it has one, and as the provider returned it" do
+    run = create_code_execution_run([ code_step("x = 1", status: nil), code_step("y = 2", status: "failed") ])
+
+    get run_path(run)
+
+    assert_select "[data-step]" do |steps|
+      assert_select steps.first, "[data-step-status]", count: 0
+      assert_select steps.last, "[data-step-status]", text: "failed"
+    end
+  end
+
+  test "shows each container once, and none when no step names one" do
+    run = create_code_execution_run([ code_step("a = 1", container_id: "cntr_1"), code_step("b = 2", container_id: "cntr_1"), code_step("c = 3", container_id: "cntr_2"), code_step("d = 4", container_id: nil) ])
+
+    get run_path(run)
+
+    assert_select "[data-container]" do |containers|
+      assert_equal %w[cntr_1 cntr_2], containers.map { |container| container.text.strip }
+    end
+
+    run = create_code_execution_run([ code_step("a = 1", container_id: nil), code_step("b = 2", container_id: nil) ])
+
+    get run_path(run)
+
+    assert_select "[data-step]", 2
+    assert_select "[data-container]", count: 0
+    assert_select "[data-code-execution-answer] *", text: /コンテナ/, count: 0
+  end
+
   test "plays the generated speech, offers it to save, and says it is AI-generated" do
     run = create_speech_run
 
@@ -604,6 +736,73 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-token-count] [data-limit-unknown]"
     assert_select "[data-token-count] [data-max-output-tokens]", count: 0
     assert_select "[data-token-count] dt", text: "最大出力トークン数", count: 0
+  end
+
+  test "shows the fallback answer, the model that gave it, the main model with its host, and the switch" do
+    run = create_fallback_run([ fallback_record ])
+
+    get run_path(run)
+
+    assert_select "[data-fallback-answer]" do
+      assert_select "*", text: "配送予定日は注文履歴から確認できます。"
+      assert_select "[data-answered-by]", text: /claude-haiku-4-5-20251001/
+      assert_select "[data-primary-model]", text: "gpt-5-nano"
+      assert_select "[data-primary-api-base]", text: "https://api.openai.invalid/v1"
+      assert_select "[data-no-fallback]", count: 0
+      assert_select "[data-fallback]", 1 do
+        assert_select "*", text: /試行 1/
+        assert_select "[data-fallback-from]", text: "OpenAI gpt-5-nano"
+        assert_select "[data-fallback-to]", text: "Anthropic claude-haiku-4-5"
+        assert_select "[data-error-kind]", text: "接続の失敗"
+        assert_select "code", text: "Faraday::ConnectionFailed"
+        assert_select "*", text: /api\.openai\.invalid:443/
+        assert_select "[data-fallback-outcome]", text: "予備モデルが応答した"
+      end
+    end
+  end
+
+  # The switch is what the demo is about, so a long answer must not push it
+  # out of sight.
+  test "puts the model that answered and the switches above the answer" do
+    get run_path(create_fallback_run([ fallback_record ]))
+
+    assert_before "[data-answered-by]", "[data-answer]"
+    assert_before "[data-fallback]", "[data-answer]"
+
+    get run_path(create_fallback_run([], model: "gpt-5-nano-2025-08-07"))
+
+    assert_before "[data-no-fallback]", "[data-answer]"
+  end
+
+  test "says the main model answered when nothing fell back" do
+    run = create_fallback_run([], model: "gpt-5-nano-2025-08-07")
+
+    get run_path(run)
+
+    assert_select "[data-fallback-answer]" do
+      assert_select "[data-answered-by]", text: /gpt-5-nano-2025-08-07/
+      assert_select "[data-no-fallback]", text: /主モデルが応答した/
+      assert_select "[data-fallback]", count: 0
+    end
+  end
+
+  test "names an error outside the failure kinds by its class alone" do
+    run = create_fallback_run([ fallback_record(error_class: "RubyLLM::ToolCallParseError") ])
+
+    get run_path(run)
+
+    assert_select "[data-fallback]" do
+      assert_select "[data-error-kind]", count: 0
+      assert_select "code", text: "RubyLLM::ToolCallParseError"
+    end
+  end
+
+  test "shows a switch whose fallback model failed as failed" do
+    run = create_fallback_run([ fallback_record(succeeded: false) ])
+
+    get run_path(run)
+
+    assert_select "[data-fallback] [data-fallback-outcome]", text: "予備モデルも失敗した"
   end
 
   test "shows what failed, where, and the likely causes" do
@@ -843,6 +1042,16 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
     run
   end
 
+  def create_code_execution_run(steps)
+    run = create_run(scenario_key: "run_code", input: { "orders" => "注文番号,金額\nE-1,4980", "request" => "合計を求めてください" })
+    run.succeed!({ "answer" => "カテゴリごとの売上は、キッチン家電が 11,460 円です。", "model" => "gpt-5-nano-2025-08-07", "steps" => steps })
+    run
+  end
+
+  def code_step(code, status: "completed", container_id: "cntr_1", outputs: [])
+    { "type" => "code_interpreter_call", "status" => status, "container_id" => container_id, "code" => code, "outputs" => outputs }
+  end
+
   # The label and the value of one row of the token count.
   def token_count_row(field)
     value = css_select("[data-token-count] [data-#{field}]").sole
@@ -890,5 +1099,31 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
       "model" => "gpt-5-nano-2025-08-07"
     }.merge(review))
     run
+  end
+
+  # A fallback run as the action records it: the answer, the model that gave
+  # it, the main model with the host its requests were sent to, and each
+  # switch to the fallback model.
+  def create_fallback_run(fallbacks, model: "claude-haiku-4-5-20251001")
+    run = create_run(scenario_key: "fall_back_to_another_provider", input: { "inquiry" => "配送予定日を教えてください。" })
+    run.succeed!({
+      "answer" => "配送予定日は注文履歴から確認できます。",
+      "model" => model,
+      "primary_model" => "gpt-5-nano",
+      "primary_api_base" => "https://api.openai.invalid/v1",
+      "fallbacks" => fallbacks
+    })
+    run
+  end
+
+  def fallback_record(error_class: "Faraday::ConnectionFailed", succeeded: true)
+    {
+      "attempt" => 1,
+      "from" => { "provider" => "openai", "model" => "gpt-5-nano" },
+      "to" => { "provider" => "anthropic", "model" => "claude-haiku-4-5" },
+      "error_class" => error_class,
+      "error_message" => "Failed to open TCP connection to api.openai.invalid:443 (getaddrinfo(3): Name or service not known)",
+      "succeeded" => succeeded
+    }
   end
 end

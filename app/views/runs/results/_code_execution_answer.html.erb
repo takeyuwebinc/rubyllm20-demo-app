@@ -1,0 +1,59 @@
+<%# The code, its outputs, and the statuses are what the model and the container returned, so they are shown as text only. An image output is not fetched, and its URL is not shown. %>
+<% result = run.result %>
+<% steps = result["steps"] %>
+<% containers = steps.filter_map { |step| step["container_id"] }.uniq %>
+<div data-code-execution-answer class="max-w-prose space-y-6">
+  <section>
+    <h2 class="text-base font-semibold text-gray-700">回答</h2>
+    <div class="mt-2 whitespace-pre-wrap break-words leading-relaxed text-gray-900"><%= result["answer"] %></div>
+  </section>
+
+  <section>
+    <h2 class="text-base font-semibold text-gray-700">実行されたコード</h2>
+    <% if steps.any? %>
+      <ol class="mt-2 space-y-5 text-sm">
+        <% steps.each.with_index(1) do |step, number| %>
+          <li data-step class="space-y-2">
+            <div class="flex items-center gap-3">
+              <span data-step-number class="font-medium text-gray-700">ステップ <%= number %></span>
+              <% if step["status"] %>
+                <code data-step-status class="rounded bg-gray-100 px-1 py-0.5 text-xs text-gray-700"><%= step["status"] %></code>
+              <% end %>
+            </div>
+            <% if step["code"] %>
+              <pre class="overflow-x-auto rounded-md bg-gray-900 p-4 text-xs leading-relaxed text-gray-100"><code><%= step["code"] %></code></pre>
+              <div class="space-y-2">
+                <p class="text-xs font-medium text-gray-500">出力</p>
+                <% if step["outputs"].any? %>
+                  <% step["outputs"].each do |output| %>
+                    <% case output["type"] %>
+                    <% when "logs" %>
+                      <pre data-output="logs" class="overflow-x-auto rounded-md bg-gray-50 p-4 text-xs leading-relaxed text-gray-900 ring-1 ring-inset ring-gray-200"><%= output["logs"] %></pre>
+                    <% when "image" %>
+                      <p data-output="image" class="text-gray-500">画像の出力（このアプリでは取得しない）</p>
+                    <% else %>
+                      <p data-output="other" class="text-gray-500">その他の出力（<%= output["type"] %>）</p>
+                    <% end %>
+                  <% end %>
+                <% else %>
+                  <p class="text-gray-500">出力なし</p>
+                <% end %>
+              </div>
+            <% else %>
+              <p><code data-step-type class="rounded bg-gray-100 px-1 py-0.5 text-gray-700"><%= step["type"] %></code></p>
+            <% end %>
+          </li>
+        <% end %>
+      </ol>
+    <% else %>
+      <p class="mt-2 text-sm text-gray-500">コードの実行なし</p>
+    <% end %>
+  </section>
+
+  <div class="space-y-1 text-sm text-gray-500">
+    <% if containers.any? %>
+      <p>コンテナ: <%= safe_join(containers.map { |id| tag.code(id, data: { container: true }, class: "break-all") }, "、") %></p>
+    <% end %>
+    <p>応答したモデル: <%= result["model"] %></p>
+  </div>
+</div>

@@ -115,7 +115,7 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
     assert_select "#approve_refund input[type=submit][value='実行する'][disabled]"
   end
 
-  test "shows the web search as runnable with its explanation, sources, code, and default question, and keeps code execution in preparation" do
+  test "shows the web search as runnable with its explanation, sources, code, and default question" do
     with_openai_key("sk-test") { get root_path }
 
     assert_select "[data-demo='provider-tools'] [data-availability]", text: "実行できる"
@@ -138,11 +138,48 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
       assert_select "textarea[name='run[input][question]']", text: /返品/
       assert_select "input[type=submit][value='実行する']:not([disabled])"
     end
+  end
+
+  test "shows the code execution as runnable with its explanation, sources, code, and default order data and request" do
+    with_openai_key("sk-test") { get demo_path("provider-tools") }
+
+    assert_select "*", text: /コードを実行する隔離環境を自前で構築、運用したくない場合にも役立つ/
+    assert_select "*", text: /include に code_interpreter_call\.outputs を足すと/
+    assert_select "*", text: /コンテナの課金を含まない/
+    assert_select "*", text: /コードを受け取って実行し、出力をモデルに返す往復/
+    %w[
+      https://rubyllm.com/provider-tools/
+      https://rubyllm.com/whats-new-in-2-0/#provider-tools
+      https://rubyllm.com/chat-request-control/#provider-options
+      https://developers.openai.com/api/docs/guides/tools-web-search
+      https://developers.openai.com/api/docs/guides/tools-code-interpreter
+      https://developers.openai.com/api/reference/resources/responses/methods/create
+      https://developers.openai.com/api/docs/pricing#built-in-tools
+    ].each { |url| assert_select "a[href='#{url}'][target='_blank']", 1 }
+    sources_heading = css_select("h2").find { |heading| heading.text.strip == "出典" }
+    assert_equal 7, sources_heading.next_element.css("li a").size
+    assert_select "a[href='https://developers.openai.com/api/docs/pricing#built-in-tools']", text: /Web 検索とコンテナの課金/
     assert_select "#run_code" do
-      assert_select "*", text: /準備中/
-      assert_select "textarea", count: 0
-      assert_select "input[type=submit]", count: 0
+      assert_select "[data-availability]", text: "実行できる"
+      assert_select "pre code", text: /with_provider_tools\(:code_execution\)/
+      assert_select "pre code", text: /with_provider_options/
+      assert_select "pre code", text: /code_interpreter_call\.outputs/
+      assert_select "pre code", text: /tool_choice/
+      assert_select "textarea[name='run[input][orders]']", text: /E-50104,2026-09-05,キッチン家電,コーヒーメーカー,7980,返金済み/
+      assert_select "textarea[name='run[input][request]']", text: /カテゴリごとの売上金額の合計/
+      assert_select "input[type=submit][value='実行する']:not([disabled])"
     end
+    assert_select "#search_web" do
+      assert_select "[data-availability]", text: "実行できる"
+      assert_select "pre code", text: /with_provider_tools\(:web_search\)/
+    end
+  end
+
+  test "keeps the code execution from running without OpenAI settings" do
+    with_openai_key(nil) { get demo_path("provider-tools") }
+
+    assert_select "#run_code [data-availability]", text: "設定値が足りない（OpenAI）"
+    assert_select "#run_code input[type=submit][value='実行する'][disabled]"
   end
 
   test "shows reading the answer aloud as runnable with its explanation, sources, code, and default answer" do
@@ -278,6 +315,48 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
 
     assert_select "#cite_return_policy [data-availability]", text: "設定値が足りない（Anthropic）"
     assert_select "#cite_return_policy input[type=submit][value='実行する'][disabled]"
+  end
+
+  test "shows the fallback as runnable with its explanation, sources, code, and default inquiry" do
+    with_openai_key("sk-test") { with_anthropic_key("sk-ant-test") { get root_path } }
+
+    assert_select "[data-demo='model-fallbacks'] [data-availability]", text: "実行できる"
+
+    with_openai_key("sk-test") { with_anthropic_key("sk-ant-test") { get demo_path("model-fallbacks") } }
+
+    assert_select "h2", text: "役立つケース"
+    assert_select "*", text: /max_retries/
+    assert_select "*", text: /予備モデルも失敗したとき/
+    assert_select "h2", text: "使わない場合に困ること"
+    assert_select "*", text: /rescue/
+    assert_select "a[href='https://rubyllm.com/error-handling/#model-fallbacks'][target='_blank']"
+    assert_select "a[href='https://rubyllm.com/whats-new-in-2-0/#model-fallbacks'][target='_blank']"
+    assert_select "a[href='https://rubyllm.com/configuration-connection/#timeouts--retries'][target='_blank']"
+    assert_select "a[href='https://rubyllm.com/instrumentation/#usage-events'][target='_blank']"
+    assert_select "#fall_back_to_another_provider" do
+      assert_select "pre code", text: /RubyLLM\.context/
+      assert_select "pre code", text: /with_fallbacks\(@fallback_model\)/
+      assert_select "pre code", text: /after_fallback/
+      assert_select "textarea[name='run[input][inquiry]']", text: /E-61294/
+      assert_select "input[type=submit][value='実行する']:not([disabled])"
+    end
+  end
+
+  test "names the provider whose settings the fallback lacks, and keeps it from running" do
+    {
+      [ nil, "sk-ant-test" ] => "設定値が足りない（OpenAI）",
+      [ "sk-test", nil ] => "設定値が足りない（Anthropic）",
+      [ nil, nil ] => "設定値が足りない（OpenAI、Anthropic）"
+    }.each do |(openai_key, anthropic_key), availability|
+      with_openai_key(openai_key) { with_anthropic_key(anthropic_key) { get root_path } }
+
+      assert_select "[data-demo='model-fallbacks'] [data-availability]", text: availability
+
+      with_openai_key(openai_key) { with_anthropic_key(anthropic_key) { get demo_path("model-fallbacks") } }
+
+      assert_select "#fall_back_to_another_provider [data-availability]", text: availability
+      assert_select "#fall_back_to_another_provider input[type=submit][value='実行する'][disabled]"
+    end
   end
 
   test "shows a scenario being prepared without code or input" do

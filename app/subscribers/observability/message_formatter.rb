@@ -46,11 +46,19 @@ module Observability
     #
     # Citations are not parts. The message shape has no type for them, and the
     # span of the answer they point to is already in the text part.
+    #
+    # A call whose result is a list, such as the outputs of code the provider
+    # ran, is followed by that list as the call's response. Any other result
+    # stays out: a string there is opaque to the reader, such as encrypted
+    # content or a base64 image.
     def server_tool_call_parts(message)
       return [] unless message.respond_to?(:server_tool_calls)
 
-      Array(message.server_tool_calls).map do |call|
-        { type: "tool_call", id: call.id, name: call.name || call.type, arguments: call.input || {} }
+      Array(message.server_tool_calls).flat_map do |call|
+        tool_call = { type: "tool_call", id: call.id, name: call.name || call.type, arguments: call.input || {} }
+        next [ tool_call ] unless call.result.is_a?(Array)
+
+        [ tool_call, { type: "tool_call_response", id: call.id, result: call.result } ]
       end
     end
 

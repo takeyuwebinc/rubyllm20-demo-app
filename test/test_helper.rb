@@ -6,8 +6,8 @@ require_relative "support/chat_helpers"
 require_relative "support/document_order_assertions"
 
 # Tests never call a provider. Fake keys make the chats they build
-# independent of the developer's .env, which dotenv reads in the test
-# environment too, and fail any call that slips through without charge.
+# independent of the developer's .env, which dotenv reads in tests as well,
+# and fail any call that slips through.
 RubyLLM.config.openai_api_key = "sk-test"
 RubyLLM.config.anthropic_api_key = "sk-ant-test"
 
