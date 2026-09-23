@@ -334,23 +334,27 @@ module Demos
     test "records a failure together with a result" do
       run = create_run
 
-      run.fail!({ "kind" => "プロバイダー側の処理の失敗" }, result: { "tickets" => [] })
+      freeze_time do
+        run.fail!({ "kind" => "プロバイダー側の処理の失敗" }, result: { "tickets" => [] })
 
-      assert_predicate run.reload, :failed?
-      assert_equal({ "kind" => "プロバイダー側の処理の失敗" }, run.failure)
-      assert_equal({ "tickets" => [] }, run.result)
-      assert_not_nil run.finished_at
+        assert_predicate run.reload, :failed?
+        assert_equal({ "kind" => "プロバイダー側の処理の失敗" }, run.failure)
+        assert_equal({ "tickets" => [] }, run.result)
+        assert_equal Time.current, run.finished_at
+      end
     end
 
     test "records a cancellation with its reason and a result" do
       run = create_run
 
-      run.cancel!({ "kind" => "プロバイダー側の処理の取り消し", "provider" => "OpenAI" }, result: { "tickets" => [] })
+      freeze_time do
+        run.cancel!({ "kind" => "プロバイダー側の処理の取り消し", "provider" => "OpenAI" }, result: { "tickets" => [] })
 
-      assert_predicate run.reload, :cancelled?
-      assert_equal({ "kind" => "プロバイダー側の処理の取り消し", "provider" => "OpenAI" }, run.failure)
-      assert_equal({ "tickets" => [] }, run.result)
-      assert_not_nil run.finished_at
+        assert_predicate run.reload, :cancelled?
+        assert_equal({ "kind" => "プロバイダー側の処理の取り消し", "provider" => "OpenAI" }, run.failure)
+        assert_equal({ "tickets" => [] }, run.result)
+        assert_equal Time.current, run.finished_at
+      end
     end
 
     test "refuses to keep or check work, cancel, or fail again on a finished run, and changes nothing" do

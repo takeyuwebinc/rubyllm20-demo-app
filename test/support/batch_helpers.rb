@@ -9,6 +9,8 @@ module BatchHelpers
   # (after uploading the requests), fetching its state, and reading its
   # result files. Everything RubyLLM does around them, such as keeping the
   # batch in its table and adding the answers to the chats, runs as it is.
+  # Each operation reports its HTTP request as RubyLLM's connection does,
+  # with the configuration of the provider that made it.
   class FakeOpenAIBatches
     attr_reader :submissions, :checks, :collections
     attr_accessor :raw_status, :request_counts, :results, :errors
@@ -25,7 +27,8 @@ module BatchHelpers
 
     # The requests are what RubyLLM would upload: a custom id, the model,
     # and the body of each request. The batches are numbered from batch_1.
-    def create_batch(requests)
+    def create_batch(requests, config:)
+      request(:post, "batches", config)
       raise errors[:create] if errors[:create]
 
       submissions << requests
@@ -34,6 +37,7 @@ module BatchHelpers
 
     # The configuration is that of the provider RubyLLM checked with.
     def find_batch(id, config:)
+      request(:get, "batches/#{id}", config)
       raise errors[:check] if errors[:check]
 
       checks << { id: id, config: config }
@@ -42,7 +46,8 @@ module BatchHelpers
 
     # Each result is [index, answer, failure status]: an answer where the
     # request succeeded, nil and :failed or :cancelled where it did not.
-    def batch_results(id)
+    def batch_results(id, config:)
+      request(:get, "batches/#{id}", config)
       raise errors[:collect] if errors[:collect]
 
       collections << id
@@ -50,6 +55,10 @@ module BatchHelpers
     end
 
     private
+
+    def request(method, url, config)
+      RubyLLM.instrument("request.ruby_llm", { provider: "openai", method: method, url: url }, config: config) { |payload| payload[:status] = 200 }
+    end
 
     def state(id)
       {
@@ -63,9 +72,9 @@ module BatchHelpers
     provider = RubyLLM::Providers::OpenAI
     names = %i[create_batch find_batch batch_results]
     own = names.to_h { |name| [ name, provider.instance_method(name) ] }.select { |_, method| method.owner == provider }
-    provider.define_method(:create_batch) { |requests| fake.create_batch(requests) }
+    provider.define_method(:create_batch) { |requests| fake.create_batch(requests, config: config) }
     provider.define_method(:find_batch) { |id| fake.find_batch(id, config: config) }
-    provider.define_method(:batch_results) { |id, batch_protocol: nil| fake.batch_results(id) }
+    provider.define_method(:batch_results) { |id, batch_protocol: nil| fake.batch_results(id, config: config) }
     yield fake
   ensure
     names.each { |name| provider.remove_method(name) }

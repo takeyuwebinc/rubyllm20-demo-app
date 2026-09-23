@@ -410,12 +410,27 @@ module Demos
       FakeHandler.check_outcome = openai_batch(raw_status: "completed")
       FakeHandler.resume_outcome = -> { raise RubyLLM::ServerError, "The server had an error" }
 
-      assert_no_error_reported { with_tracing { perform(retryable: false) } }
+      freeze_time do
+        assert_no_error_reported { with_tracing { perform(retryable: false) } }
 
-      assert_predicate @run.reload, :running?
-      assert_equal "サーバー側のエラー", @run.remote_job["check_failure"]["kind"]
-      assert_empty @run.traces
-      assert_enqueued_with(job: RunJob, args: [ @run ])
+        assert_predicate @run.reload, :running?
+        assert_equal({ "kind" => "サーバー側のエラー", "message" => "The server had an error", "at" => Time.current.iso8601(3) }, @run.remote_job["check_failure"])
+        assert_empty @run.traces
+        assert_enqueued_with(job: RunJob, args: [ @run ], at: 1.minute.from_now)
+      end
+    end
+
+    test "fails, reports, and stops checking on a collection that fails for an error of this app" do
+      keep_work
+      FakeHandler.check_outcome = openai_batch(raw_status: "completed")
+      FakeHandler.resume_outcome = -> { raise JSON::ParserError, "unexpected token" }
+
+      assert_error_reported(JSON::ParserError) { perform(retryable: false) }
+
+      assert_predicate @run.reload, :failed?
+      assert_equal "JSON::ParserError", @run.failure["kind"]
+      assert_nil @run.result
+      assert_no_enqueued_jobs
     end
 
     test "fails, reports, and stops checking on a check that fails for an error of this app" do

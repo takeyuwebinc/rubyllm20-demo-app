@@ -257,7 +257,7 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
       assert_select "pre code", text: /ask_later\(ticket\)/
       assert_select "pre code", text: /RubyLLM\.batch\(chats\)/
       assert_select "textarea[name='run[input][tickets]']", text: /D-40518/
-      assert_select "textarea[name='run[input][tickets]']", text: /ギフト用の包装/
+      assert_select "textarea[name='run[input][tickets]']", text: /メールアドレスを変更したい/
       assert_select "input[type=submit][value='実行する']:not([disabled])"
     end
   end

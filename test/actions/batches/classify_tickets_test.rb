@@ -102,7 +102,7 @@ module Batches
         end
         batch = ClassifyTickets.check("batch_1")
 
-        assert_empty events
+        assert_empty events, "a check must report neither the batch nor its HTTP request"
         assert_equal [ nil ], openai.checks.map { |check| check[:config].instrumenter }.uniq
         assert_equal 3, openai.checks.map { |check| check[:config].object_id }.uniq.size
         refute_includes openai.checks.map { |check| check[:config] }, RubyLLM.config
@@ -132,7 +132,10 @@ module Batches
         ])
 
         result = nil
-        events = capture_events("usage.ruby_llm") { result = ClassifyTickets.resume("batch_1") }
+        requests = []
+        events = capture_events("usage.ruby_llm") do
+          requests = capture_events("request.ruby_llm") { result = ClassifyTickets.resume("batch_1") }
+        end
 
         assert_equal({
           "batch_id" => "batch_1",
@@ -149,6 +152,7 @@ module Batches
         assert_equal [ "batch_1" ], openai.collections
         chats = Chat.order(:id).last(3)
         assert_equal [ %w[system user assistant], %w[system user], %w[system user assistant] ], chats.map { |chat| chat.messages.order(:id).map(&:role) }
+        assert_equal 1, requests.size, "a collection reports its HTTP request, unlike a check"
         assert_equal 2, events.size
         assert_equal [ :chat ], events.map { |event| event.payload[:operation] }.uniq
         assert_equal [ 180 ], events.map { |event| event.payload[:tokens].input }.uniq

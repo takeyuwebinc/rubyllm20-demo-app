@@ -159,7 +159,7 @@
 
             注文番号 D-40533 の代金が、クレジットカードに 2 回請求されています。
 
-            誕生日のプレゼントにしたいのですが、ギフト用の包装とメッセージカードはお願いできますか。
+            会員登録に使ったメールアドレスを変更したいのですが、どこから手続きできますか。
       result_kind: batch_classification
       # Starting over would submit the same tickets again and pay for them
       # twice. A job that runs again goes on from the batch the run keeps.

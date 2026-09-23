@@ -531,6 +531,21 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-batch-model]", text: "—"
   end
 
+  test "shows a batch whose every ticket failed as a success, with every ticket failed" do
+    run = create_batch_run(raw_status: "completed")
+    run.succeed!(batch_result([ [ "荷物が届かない。", "failed", nil, nil ], [ "返品したい。", "failed", nil, nil ] ], model: nil))
+
+    get run_path(run)
+
+    assert_select "[data-run-status]", text: "成功"
+    assert_select "[data-batch-counts]", text: "成功 0 件、失敗 2 件、全 2 件"
+    assert_select "[data-ticket]", 2
+    assert_select "[data-ticket] [data-ticket-status]" do |badges|
+      assert_equal %w[失敗 失敗], badges.map { |badge| badge.text.strip }
+    end
+    assert_select "[data-ticket-missing]", 2
+  end
+
   test "shows why an expired batch failed, and what it finished" do
     run = create_batch_run(raw_status: "expired")
     run.fail!(
