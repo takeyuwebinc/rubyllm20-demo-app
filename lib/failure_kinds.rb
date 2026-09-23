@@ -74,6 +74,18 @@ module FailureKinds
     TABLE.find { |error_class, _| error.is_a?(error_class) }&.last
   end
 
+  # Returns the Kind for an error class given by its name, as a result keeps
+  # it, judged as .for judges an error of that class. Returns nil when the
+  # name is not a class the table knows.
+  def self.for_class_name(name)
+    error_class = Object.const_get(name) unless name.to_s.empty?
+    return unless error_class.is_a?(Class)
+
+    TABLE.find { |table_class, _| error_class <= table_class }&.last
+  rescue NameError
+    nil
+  end
+
   # Whether +error+ came from calling a provider rather than from a bug in
   # the caller: any RubyLLM::Error, or an error the table names.
   def self.provider_call?(error)
