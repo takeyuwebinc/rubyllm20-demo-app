@@ -4,10 +4,31 @@
      data-poll-url-value="<%= run_status_path(run) %>"
      data-poll-active-value="<%= run.running? %>">
   <div>
-    <div class="flex items-center gap-3">
-      <%= run_status_badge(run, size: :large) %>
-      <% if run.running? %>
-        <span class="text-sm text-gray-600">実行を指示してから <%= (Time.current - run.created_at).to_i %> 秒</span>
+    <%# The Sentry links sit on the status row so that a long result does not push them out of sight. They stay in this
+        part, not the page header, so a trace recorded while the run is in progress appears with the next poll. %>
+    <div data-run-status-row class="flex flex-wrap items-center justify-between gap-x-6 gap-y-3">
+      <div class="flex items-center gap-3">
+        <%= run_status_badge(run, size: :large) %>
+        <% if run.running? %>
+          <span class="text-sm text-gray-600">実行を指示してから <%= (Time.current - run.created_at).to_i %> 秒</span>
+        <% end %>
+      </div>
+      <% if sentry_links.available? %>
+        <div data-sentry-links class="flex flex-wrap items-center gap-3">
+          <% newest, *older = run.trace_ids.reverse %>
+          <% if newest %>
+            <%# While the run waits for a decision, 承認する is the page's one primary action. Once the run has ended,
+                the trace is the main way to look into what happened, so the link takes the primary rank back. %>
+            <%= link_to "Sentry でトレースを開く", sentry_trace_url(run, newest), target: "_blank", rel: "noopener",
+                  class: run.awaiting_approval? ? "btn-secondary" : "btn-primary" %>
+          <% end %>
+          <%= link_to "Sentry で会話を開く", sentry_conversation_url(run), target: "_blank", rel: "noopener", class: "btn-secondary" %>
+          <% older.each.with_index(1) do |trace_id, index| %>
+            <%= link_to "以前のトレース #{index}", sentry_trace_url(run, trace_id), target: "_blank", rel: "noopener", class: "btn-secondary" %>
+          <% end %>
+        </div>
+      <% else %>
+        <p data-sentry-links class="text-sm text-gray-500">Sentry へのリンクには、<code>.env</code> の <code>SENTRY_ORG</code> と <code>SENTRY_DSN</code> が要る。</p>
       <% end %>
     </div>
     <% if run.running? %>
@@ -43,7 +64,9 @@
 
   <% if run.succeeded? %>
     <% result_kind = run.scenario&.result_kind || "raw" %>
-    <%= render "runs/results/#{result_kind}", run: run %>
+    <div data-run-result>
+      <%= render "runs/results/#{result_kind}", run: run %>
+    </div>
   <% end %>
 
   <% if run.failed? %>
@@ -59,21 +82,6 @@
         <p class="mt-2 text-sm text-gray-700">原因の候補: <%= failure["hint"] %></p>
       <% end %>
     </section>
-  <% end %>
-
-  <% if sentry_links.available? %>
-    <div class="flex flex-wrap items-center gap-3">
-      <% newest, *older = run.trace_ids.reverse %>
-      <% if newest %>
-        <%= link_to "Sentry でトレースを開く", sentry_trace_url(run, newest), target: "_blank", rel: "noopener", class: "btn-primary" %>
-      <% end %>
-      <%= link_to "Sentry で会話を開く", sentry_conversation_url(run), target: "_blank", rel: "noopener", class: "btn-secondary" %>
-      <% older.each.with_index(1) do |trace_id, index| %>
-        <%= link_to "以前のトレース #{index}", sentry_trace_url(run, trace_id), target: "_blank", rel: "noopener", class: "btn-secondary" %>
-      <% end %>
-    </div>
-  <% else %>
-    <p class="text-sm text-gray-500">Sentry へのリンクには、<code>.env</code> の <code>SENTRY_ORG</code> と <code>SENTRY_DSN</code> が要る。</p>
   <% end %>
 
   <dl class="grid max-w-xl grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-sm">
