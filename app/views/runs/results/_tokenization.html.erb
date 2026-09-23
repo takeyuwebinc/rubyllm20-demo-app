@@ -1,7 +1,9 @@
 <%# Each token is framed, so that where one ends and the next begins can be seen, with its id beside it. Its string comes from the
     provider: it keeps its spaces, tabs, and line breaks, and is escaped as any text. A token that ends partway through a
     character has an empty string, and left empty it would look like no token at all. Its bytes are shown instead, as two-digit
-    lowercase hexadecimal in a dashed frame that marks it as a fragment. Every token is drawn, however long the text. %>
+    lowercase hexadecimal in a dashed frame that marks it as a fragment. Every token is drawn, however long the text: the demo
+    is for self-study and its default text is short, so the heavy page of a long text (about 18,000 tokens for 33,000
+    characters) is accepted rather than cut. %>
 <% result = run.result %>
 <% tokens = result["tokens"] %>
 <div data-tokenization class="space-y-4">

@@ -152,7 +152,8 @@ module Observability
     # The count is kept out of gen_ai.usage: Sentry would estimate a cost from
     # it, and tokenizing is not billed as usage. It is no content, so it is
     # sent whether content is captured or not. The text itself is not in the
-    # payload.
+    # payload, and the tokens are not sent: a long text has tens of thousands
+    # of them, more than a span attribute holds.
     #
     # Sentry's default data scrubbing removes attributes whose names contain
     # "token". The Sentry project lists 'ruby_llm.tokenization.count', quoted
