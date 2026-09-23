@@ -408,6 +408,49 @@ module Observability
       assert_empty attributes.keys.grep(/messages|instructions/), "the event carries no prompt or answer"
     end
 
+    test "reports usage that no workflow and no operation encloses as that operation, in a trace of its own" do
+      instrument("usage.ruby_llm", operation: :chat, provider: "openai", model: "gpt-5-nano", status: :succeeded,
+        tokens: RubyLLM::Tokens.new(input: 3, output: 4), cost: FakeCost.new(nil))
+
+      chat = span("chat gpt-5-nano")
+
+      assert_equal "gen_ai.chat", chat.attributes["sentry.op"]
+      assert_equal OpenTelemetry::Trace::INVALID_SPAN_ID, chat.parent_span_id
+    end
+
+    test "keeps usage of an operation it cannot describe as an attempt" do
+      instrument("usage.ruby_llm", operation: :unknown_work, provider: "openai", model: "gpt-5-nano", status: :succeeded,
+        tokens: RubyLLM::Tokens.new(input: 3), cost: FakeCost.new(nil))
+
+      assert_equal "unknown_work", span("attempt unknown_work gpt-5-nano").attributes["ruby_llm.attempt.operation"]
+    end
+
+    # RubyLLM prices a batch answer of a model without batch prices at half
+    # the standard rate, part by part, and leaves the total nil when the
+    # answer has reasoning tokens, which the output part already includes.
+    test "sends the sum of a batch answer's parts when only its reasoning is left unpriced" do
+      tokens = RubyLLM::Tokens.new(input: 296, output: 665, thinking: 576)
+      cost = RubyLLM::Cost.from_h({ input: 0.0000074, output: 0.000133 }, tokens: tokens)
+      assert_nil cost.total
+
+      instrument("usage.ruby_llm", operation: :chat, provider: "openai", model: "gpt-5-nano-2025-08-07", status: :succeeded, tokens: tokens, cost: cost)
+
+      assert_in_delta 0.0001404, span("chat gpt-5-nano-2025-08-07").attributes["gen_ai.cost.total_tokens"], 1e-12
+    end
+
+    test "sends no cost when a part other than reasoning is unpriced, or reasoning exceeds the output" do
+      [
+        [ RubyLLM::Tokens.new(input: 296, output: 665, thinking: 576), RubyLLM::Cost.from_h({ input: 0.0000074 }, tokens: RubyLLM::Tokens.new(input: 296, output: 665, thinking: 576)) ],
+        [ RubyLLM::Tokens.new(input: 296, output: 665, cache_read: 100, thinking: 576), RubyLLM::Cost.from_h({ input: 0.0000074, output: 0.000133 }, tokens: RubyLLM::Tokens.new(input: 296, output: 665, cache_read: 100, thinking: 576)) ],
+        [ RubyLLM::Tokens.new(input: 296, output: 100, thinking: 576), RubyLLM::Cost.from_h({ input: 0.0000074, output: 0.00002 }, tokens: RubyLLM::Tokens.new(input: 296, output: 100, thinking: 576)) ]
+      ].each_with_index do |(tokens, cost), index|
+        @exporter.reset
+        instrument("usage.ruby_llm", operation: :chat, provider: "openai", model: "gpt-5-nano", status: :succeeded, tokens: tokens, cost: cost)
+
+        assert_nil span("chat gpt-5-nano").attributes["gen_ai.cost.total_tokens"], "case #{index}"
+      end
+    end
+
     test "describes a batch submission by its id and its number of requests" do
       instrument("workflow.ruby_llm", workflow_name: "Batches: classify", workflow_metadata: { conversation_id: "run-1" }) do
         instrument("batch.ruby_llm", workflow_name: "Batches: classify", provider: "openai", requests: 5) { |payload| payload[:batch_id] = "batch_69d2" }

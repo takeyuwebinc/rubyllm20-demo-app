@@ -234,8 +234,27 @@ module Observability
         "gen_ai.usage.total_tokens" => (input_total + tokens.output if input_total && tokens.output),
         # Sentry keeps a cost it is given instead of estimating one. Its own
         # estimate knows nothing about batch rates or unlisted models.
-        "gen_ai.cost.total_tokens" => cost&.total&.to_f
+        "gen_ai.cost.total_tokens" => cost_total(tokens, cost)&.to_f
       }
+    end
+
+    # RubyLLM 2.0.0 prices a batch answer of a model without batch prices at
+    # half the standard rate, part by part, with the reasoning tokens inside
+    # the output part, as the provider bills them. It then counts the
+    # reasoning as a part left unpriced and gives no total, and Sentry would
+    # estimate one at the standard rate, twice the batch's. When reasoning
+    # is the only part without an amount, the parts are summed here.
+    # TODO(when RubyLLM gives a total for a batch answer with reasoning
+    # tokens): send cost.total alone.
+    def cost_total(tokens, cost)
+      return cost&.total if cost.nil? || !cost.total.nil? || !cost.respond_to?(:thinking)
+      return unless tokens.thinking.to_i.positive? && cost.thinking.nil? && cost.output
+      return unless tokens.thinking <= tokens.output.to_i
+
+      parts = %i[input output cache_read cache_write]
+      return unless parts.all? { |part| !tokens.public_send(part).to_i.positive? || cost.public_send(part) }
+
+      parts.filter_map { |part| cost.public_send(part) }.sum
     end
 
     def tool_attributes(payload)
