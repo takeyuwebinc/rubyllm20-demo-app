@@ -493,6 +493,61 @@ module Observability
       assert_equal "mp3", speech.attributes["ruby_llm.speech.format"], "the format asked for"
     end
 
+    test "describes a submitted video job by its id and options, with the prompt as the input" do
+      instrument("video_job.ruby_llm", video_job_payload) { |payload| payload[:job_id] = "0eb6910f-a353-4699-9d1e-6a4f7a5b39e2" }
+
+      attributes = span("video_job grok-imagine-video-1.5").attributes
+
+      assert_equal "0eb6910f-a353-4699-9d1e-6a4f7a5b39e2", attributes["ruby_llm.video_job.id"]
+      assert_equal({ "duration" => 6, "resolution" => "480p", "aspect_ratio" => "16:9" }, JSON.parse(attributes["ruby_llm.video_job.options"]))
+      assert_equal [ { "role" => "user", "parts" => [ { "type" => "text", "content" => "電気ケトルの紹介動画" } ] } ],
+        JSON.parse(attributes["gen_ai.input.messages"])
+      assert_equal "video_job", attributes["ruby_llm.operation"]
+      assert_equal "xai", attributes["gen_ai.provider.name"]
+      assert_equal "grok-imagine-video-1.5", attributes["gen_ai.request.model"]
+      assert_equal "EC: 紹介動画", attributes["gen_ai.agent.name"]
+      assert_equal "run-1", attributes["gen_ai.conversation.id"]
+      assert_not_includes attributes.keys, "sentry.op"
+      assert_not_includes attributes.keys, "gen_ai.operation.name"
+      assert_not_includes attributes.keys, "gen_ai.output.messages"
+    end
+
+    test "marks a video job that failed to submit as failed, without an id" do
+      assert_raises(RubyLLM::RateLimitError) do
+        instrument("video_job.ruby_llm", video_job_payload) { raise RubyLLM::RateLimitError, "Rate limit reached" }
+      end
+
+      video_job = span("video_job grok-imagine-video-1.5")
+
+      assert_equal OpenTelemetry::Trace::Status::ERROR, video_job.status.code
+      assert_equal "RubyLLM::RateLimitError", video_job.attributes["error.type"]
+      assert_equal "Rate limit reached", video_job.attributes["error.message"]
+      assert_not_includes video_job.attributes.keys, "ruby_llm.video_job.id"
+    end
+
+    test "leaves the input out when the video prompt is empty, and still describes the job" do
+      instrument("video_job.ruby_llm", video_job_payload.merge(prompt: "")) { |payload| payload[:job_id] = "video-1" }
+
+      attributes = span("video_job grok-imagine-video-1.5").attributes
+
+      assert_not_includes attributes.keys, "gen_ai.input.messages"
+      assert_equal "video-1", attributes["ruby_llm.video_job.id"]
+      assert_includes attributes.keys, "ruby_llm.video_job.options"
+    end
+
+    test "leaves the video prompt out when content capture is off, and still describes the job" do
+      ActiveSupport::Notifications.unsubscribe(@subscription)
+      @subscription = ActiveSupport::Notifications.subscribe(/\.ruby_llm\z/, RubyLLMSpanSubscriber.new(tracer: @provider.tracer("test"), capture_content: false))
+
+      instrument("video_job.ruby_llm", video_job_payload) { |payload| payload[:job_id] = "video-1" }
+
+      attributes = span("video_job grok-imagine-video-1.5").attributes
+
+      assert_empty attributes.keys.grep(/messages/)
+      assert_equal "video-1", attributes["ruby_llm.video_job.id"]
+      assert_equal({ "duration" => 6, "resolution" => "480p", "aspect_ratio" => "16:9" }, JSON.parse(attributes["ruby_llm.video_job.options"]))
+    end
+
     test "ignores events that are not model work" do
       instrument("models.refresh.ruby_llm", remote_only: true)
 
@@ -552,6 +607,16 @@ module Observability
         provider: "openai", model: "gpt-4o-mini-tts", input: "ご注文の商品は明日お届けします。",
         voice: "marin", format: "mp3", provider_options: { instructions: "落ち着いた口調で" }, streaming: false,
         tokens: RubyLLM::Tokens.new, cost: FakeCost.new(nil)
+      }
+    end
+
+    # What RubyLLM.animate_later instruments when it submits a video inside
+    # a workflow; the job id is added once the provider accepts it.
+    def video_job_payload
+      {
+        provider: "xai", provider_class: "xAI", model: "grok-imagine-video-1.5", prompt: "電気ケトルの紹介動画",
+        provider_options: { duration: 6, resolution: "480p", aspect_ratio: "16:9" }, metadata: nil,
+        workflow_name: "EC: 紹介動画", workflow_metadata: { conversation_id: "run-1" }
       }
     end
 

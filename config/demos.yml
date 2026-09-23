@@ -225,11 +225,21 @@
 
     OpenAI の利用規約は、AI が生成した音声であることを聞き手に明示するよう求めている。
 
-    動画の生成（`RubyLLM.animate`）の説明は、商品の紹介動画の代表シナリオとあわせて用意する。
+    商品の説明文から、短い紹介動画を用意したい場合にも役立つ。動画の生成は、どのプロバイダーでも、投入してから完成を待つ非同期の処理である。`RubyLLM.animate` は完成まで待って `RubyLLM::Video` を返す。`RubyLLM.animate_later` は投入だけを行い、`RubyLLM::VideoJob` をすぐ返す。`refresh` で状態を問い合わせ、`wait` で完成まで待ち、`video` で動画を受け取る。待ち時間の上限（既定は 600 秒）と問い合わせの間隔（既定は 5 秒）は、設定の `video_generation_timeout` と `video_generation_poll_interval`、または `wait` の引数で変えられる。
+
+    xAI の文書では、完成まで典型的には最大で数分かかる。このデモは、`animate_later` が返した `VideoJob` の `id` を実行の記録に控えてから、同じジョブの中で `wait` する。アプリの停止でジョブが戻されても、控えた ID から待ち直し、動画を生成し直さない。ただし RubyLLM 2.0.0 には、ID から `VideoJob` を開き直す公開の API がない（`Batch` と `ResearchJob` にはある `find` が、`VideoJob` にはない）。このデモは、RubyLLM が内部で行う組み立てを 1 つのメソッドで再現している。gem のバージョンを固定しているので成り立つ。
+
+    xAI は、完成した動画を一時的な URL で返す。`Video#to_blob` がその URL からダウンロードし、`save` はファイルに書く。URL の有効期間は文書に書かれていないので、残すならすぐにダウンロードする。このデモは、実行の成功を記録するときにダウンロードして添付している。
+
+    xAI では、`provider_options:` で秒数（`duration`。1〜15 秒）、縦横比（`aspect_ratio`。既定は `16:9`）、解像度（`resolution`。既定は `480p`）、音声の有無（`generate_audio`。既定は付ける）を指定できる。料金は秒数と解像度で決まり、`grok-imagine-video-1.5` は 480p が 1 秒 0.08 ドル、720p が 0.14 ドル、1080p が 0.25 ドルである。このデモの 6 秒・480p の動画は 0.48 ドルになる。
+
+    計装イベントは、投入の `video_job.ruby_llm` と、投入と状態の問い合わせの `request.ruby_llm` である。`video.ruby_llm` は `animate` を使ったときだけ発行され、ダウンロードは計装されない。xAI は状態の応答の `usage.cost_in_usd_ticks` に費用を返す（1 ティックは 100 億分の 1 ドル。このデモの動画では 4,800,000,000、つまり 0.48 ドルだった。2026-09-23 に実際の API で確かめた）。ただし RubyLLM 2.0.0 の `Video` はこれを読まず、RubyLLM のモデルの登録簿にも xAI の動画の単価がない。そのため RubyLLM のコストは不明になり、このアプリも Sentry にコストを送らない。費用が要るときは、`video.raw` の `usage` から読む。
   without_it: |-
     プロバイダーの音声の API を直接呼ぶと、エンドポイント、パラメーターの名前（声、形式）、バイナリの応答の受け取り、ストリーミング、エラーの変換を、自分で書いて保守することになる。
 
     プロバイダーを替える（ElevenLabs、Gemini、Deepgram など）と、要求と応答の形が変わり、書き直しになる。たとえば ElevenLabs は声を名前ではなく ID で指定し、Gemini は生の PCM を返す。RubyLLM では、`model:` を替えるだけで同じ `RubyLLM::Speech` が返り、形式は `speech.format` と `speech.mime_type` で分かる。
+
+    動画の API を直接呼ぶと、投入、状態の問い合わせの繰り返し、状態の判定（xAI では `pending`、`done`、`failed`、`expired`）、ダウンロードを自分で書くことになる。処理の ID の形、状態の名前、応答の形はプロバイダーごとに違う。RubyLLM は、状態を `VideoJob` の `status`（`:pending`、`:completed`、`:failed`）にそろえる。
   sources:
     - title: Text to Speech（RubyLLM）— Basic Speech Generation、Voices、Formats、Style
       url: https://rubyllm.com/text-to-speech/
@@ -241,6 +251,12 @@
       url: https://developers.openai.com/api/docs/guides/text-to-speech
     - title: Create speech（OpenAI）— 入力の上限とパラメーター
       url: https://developers.openai.com/api/reference/resources/audio/subresources/speech/methods/create
+    - title: Video Generation（xAI）— エンドポイント、パラメーター、状態、一時的な URL、エラー
+      url: https://docs.x.ai/developers/model-capabilities/video/generation
+    - title: Imagine Overview（xAI）— 非同期の流れ、秒数と解像度による料金
+      url: https://docs.x.ai/developers/model-capabilities/imagine
+    - title: grok-imagine-video-1.5（xAI）— 解像度ごとの料金
+      url: https://docs.x.ai/developers/models/grok-imagine-video-1.5
   scenarios:
     - key: speak_answer
       name: 回答文を読み上げる
@@ -264,6 +280,23 @@
       retryable: true
     - key: generate_product_video
       name: 商品の紹介動画を生成する
+      handler: VideoAndSpeech::GenerateProductVideo
+      providers: [xai]
+      models:
+        model: grok-imagine-video-1.5
+      # Only the description is an input. The length, resolution, and aspect
+      # ratio are fixed in the handler, where the code shows how to choose
+      # them, and where they keep the cost of a run known.
+      inputs:
+        - name: description
+          label: 商品の説明文
+          required: true
+          default: |-
+            ステンレス製の電気ケトル「ソラ」。容量は 1.0 リットルで、マットな白の本体に木目調の取っ手が付いています。注ぎ口が細く、ハンドドリップのコーヒーにも使えます。沸騰すると自動で電源が切れます。
+      result_kind: product_video
+      # Starting over would generate the video, and pay for it, again. A job
+      # that runs again waits for the video by the id the run keeps.
+      retryable: false
 
 - key: provider-tools
   name: Provider Tools

@@ -8,6 +8,28 @@ module Demos
     # A generated file without a format, as RubyLLM's Video and Image have none.
     GeneratedClip = Struct.new(:to_blob, :mime_type)
 
+    # A video that holds only a URL, as RubyLLM's Video from xAI does: every
+    # to_blob downloads it. It notes how many transactions were open at the
+    # time, and how often it was read.
+    class DownloadedClip
+      attr_reader :mime_type, :reads, :open_transactions
+
+      def initialize(bytes: "mp4 bytes", error: nil)
+        @bytes = bytes
+        @error = error
+        @mime_type = "video/mp4"
+        @reads = 0
+      end
+
+      def to_blob
+        @reads += 1
+        @open_transactions = Run.connection.open_transactions
+        raise @error if @error
+
+        @bytes
+      end
+    end
+
     test "starts a run with the given input and queues its job" do
       run = Run.start(runnable_scenario, "inquiry" => "Where is my order?")
 
@@ -109,6 +131,51 @@ module Demos
       assert_equal %w[speech.mp3 video.mp4], run.generated_files.map { |file| file.filename.to_s }.sort
       assert_equal({ "filename" => "speech.mp3", "content_type" => "audio/mpeg", "byte_size" => 3 }, run.result["speech"])
       assert_equal({ "filename" => "video.mp4", "content_type" => "video/mp4", "byte_size" => 9 }, run.result["video"])
+    end
+
+    test "downloads a generated file once, before the transaction that records the result opens" do
+      run = create_run
+      clip = DownloadedClip.new(bytes: "x" * 2_048)
+      outside = Run.connection.open_transactions
+
+      run.succeed!({ "video" => clip, "model" => "grok-imagine-video-1.5" })
+
+      assert_equal 1, clip.reads
+      assert_equal outside, clip.open_transactions
+      run.reload
+      assert_predicate run, :succeeded?
+      file = run.generated_files.sole
+      assert_equal "x" * 2_048, file.download
+      assert_equal({ "filename" => "video.mp4", "content_type" => "video/mp4", "byte_size" => 2_048 }, run.result["video"])
+    end
+
+    test "keeps nothing and stays running when downloading a generated file fails" do
+      run = create_run
+      clip = DownloadedClip.new(error: Faraday::ResourceNotFound.new("the server responded with status 404"))
+
+      assert_no_difference([ -> { ActiveStorage::Blob.count }, -> { ActiveStorage::Attachment.count } ]) do
+        error = assert_raises(Faraday::ResourceNotFound) { run.succeed!({ "video" => clip, "model" => "grok-imagine-video-1.5" }) }
+        assert_equal "the server responded with status 404", error.message
+      end
+
+      run.reload
+      assert_predicate run, :running?
+      assert_nil run.result
+      assert_nil run.finished_at
+      assert_empty run.generated_files
+    end
+
+    test "never downloads a generated file for a finished run or a run waiting for approval" do
+      runs = %w[succeeded failed cancelled].map { |status| create_run(status: status, finished_at: 1.minute.ago) }
+      runs << create_awaiting_run
+
+      runs.each do |run|
+        clip = DownloadedClip.new
+
+        assert_raises(ActiveRecord::RecordInvalid, run.status) { run.succeed!({ "video" => clip }) }
+
+        assert_equal 0, clip.reads, run.status
+      end
     end
 
     test "keeps no attachment for a result without generated files" do
@@ -253,6 +320,92 @@ module Demos
       assert_equal "ワーカーの異常終了", abandoned.failure["kind"]
       assert_predicate finished.reload, :succeeded?
       assert_predicate awaiting.reload, :awaiting_approval?
+    end
+
+    test "queues again the job of a run a dead worker left waiting on the provider, and keeps it running" do
+      waiting = create_run(remote_job_id: "video-1")
+
+      Run.fail_abandoned!([ waiting.id ], message: "Process pid=1 exited unexpectedly")
+
+      waiting.reload
+      assert_predicate waiting, :running?
+      assert_nil waiting.failure
+      assert_nil waiting.finished_at
+      assert_equal "video-1", waiting.remote_job_id
+      assert_enqueued_with(job: RunJob, args: [ waiting ])
+    end
+
+    test "fails or queues again each run a dead worker left, by whether it waits on the provider" do
+      waiting = create_run(remote_job_id: "video-1")
+      abandoned = create_run
+      finished = create_run(remote_job_id: "video-2").tap { |run| run.succeed!({ "answer" => "done" }) }
+
+      Run.fail_abandoned!([ waiting.id, abandoned.id, finished.id ])
+
+      assert_predicate waiting.reload, :running?
+      assert_predicate abandoned.reload, :failed?
+      assert_equal "ワーカーの異常終了", abandoned.failure["kind"]
+      assert_predicate finished.reload, :succeeded?
+      assert_enqueued_jobs 1
+      assert_enqueued_with(job: RunJob, args: [ waiting ])
+    end
+
+    test "does nothing when a dead worker left no job" do
+      running = create_run
+
+      Run.fail_abandoned!([])
+
+      assert_predicate running.reload, :running?
+      assert_no_enqueued_jobs
+    end
+
+    test "keeps the id of the work left with the provider, and nothing else changes" do
+      started_at = 1.minute.ago.change(usec: 0)
+      run = create_run(started_at: started_at)
+
+      run.record_remote_job_id!("video-1")
+
+      run.reload
+      assert_equal "video-1", run.remote_job_id
+      assert_predicate run, :running?
+      assert_equal started_at, run.started_at
+      assert_nil run.result
+      assert_nil run.finished_at
+    end
+
+    test "refuses a blank id of the work left with the provider" do
+      run = create_run
+
+      [ nil, "", "  " ].each do |id|
+        assert_raises(ArgumentError, id.inspect) { run.record_remote_job_id!(id) }
+      end
+
+      run.reload
+      assert_nil run.remote_job_id
+      assert_predicate run, :running?
+    end
+
+    test "refuses to keep another id for a run that already keeps one" do
+      run = create_run(remote_job_id: "video-1")
+
+      assert_raises(ActiveRecord::RecordInvalid) { run.record_remote_job_id!("video-2") }
+
+      assert_equal "video-1", run.reload.remote_job_id
+    end
+
+    test "refuses to keep an id for a finished run or a run waiting for approval" do
+      runs = %w[succeeded failed cancelled].map { |status| create_run(status: status, finished_at: 1.minute.ago) }
+      runs << create_awaiting_run
+
+      runs.each do |run|
+        status = run.status
+
+        assert_raises(ActiveRecord::RecordInvalid, status) { run.record_remote_job_id!("video-1") }
+
+        run.reload
+        assert_nil run.remote_job_id, status
+        assert_equal status, run.status
+      end
     end
 
     test "lists the runs of a demo, newest first" do

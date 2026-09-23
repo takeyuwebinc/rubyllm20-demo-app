@@ -5,18 +5,27 @@ module Demos
     # Stands in for a scenario handler so that no provider is called.
     class FakeHandler
       class << self
-        attr_accessor :calls, :outcome, :resumed, :resume_outcome
+        attr_accessor :calls, :outcome, :resumed, :resumed_models, :resume_outcome
 
         def perform(**arguments)
           calls << arguments
           outcome.respond_to?(:call) ? outcome.call : outcome
         end
 
-        def resume(chat)
-          resumed << chat
+        # Continues a chat, or waits for the work left with the provider
+        # under an id, as a handler of either kind does.
+        def resume(chat_or_id, **models)
+          resumed << chat_or_id
+          resumed_models << models
           resume_outcome.respond_to?(:call) ? resume_outcome.call : resume_outcome
         end
       end
+    end
+
+    # Work left with the provider, as RubyLLM's VideoJob and ResearchJob
+    # stand for it: an id and whether it is still pending.
+    RemoteJob = Data.define(:id) do
+      def pending? = true
     end
 
     # Answers each question, or each count, with the next scripted answer, in
@@ -59,6 +68,7 @@ module Demos
       FakeHandler.calls = []
       FakeHandler.outcome = { "answer" => "Your order ships tomorrow." }
       FakeHandler.resumed = []
+      FakeHandler.resumed_models = []
       FakeHandler.resume_outcome = { "answer" => "Refunded." }
       @run = Run.create!(scenario_key: "answer_inquiry", input: { "inquiry" => "Where is my order?" })
     end
@@ -69,6 +79,82 @@ module Demos
       assert_predicate @run.reload, :succeeded?
       assert_equal({ "answer" => "Your order ships tomorrow." }, @run.result)
       assert_not_nil @run.finished_at
+      assert_nil @run.remote_job_id
+      assert_empty FakeHandler.resumed
+    end
+
+    test "keeps the id of the work the scenario left with the provider, then waits for it in the same trace" do
+      FakeHandler.outcome = RemoteJob.new(id: "video-1")
+      kept_before_waiting = nil
+      trace_while_waiting = nil
+      FakeHandler.resume_outcome = lambda do
+        kept_before_waiting = Run.find(@run.id).remote_job_id
+        trace_while_waiting = OpenTelemetry::Trace.current_span.context.hex_trace_id
+        { "answer" => "A video of the kettle." }
+      end
+
+      workflow_span = with_tracing { perform(retryable: false) }
+
+      @run.reload
+      assert_equal "video-1", kept_before_waiting
+      assert_equal workflow_span.hex_trace_id, trace_while_waiting, "waits inside the workflow"
+      assert_equal "video-1", @run.remote_job_id
+      assert_equal [ "video-1" ], FakeHandler.resumed
+      assert_equal [ { model: "gpt-5-nano" } ], FakeHandler.resumed_models
+      assert_predicate @run, :succeeded?
+      assert_equal({ "answer" => "A video of the kettle." }, @run.result)
+      assert_equal [ workflow_span.hex_trace_id ], @run.trace_ids
+    end
+
+    test "records a failure while waiting for the work left with the provider, and keeps its id" do
+      FakeHandler.outcome = RemoteJob.new(id: "video-1")
+      FakeHandler.resume_outcome = -> { raise RubyLLM::Error, "Video generation failed: expired" }
+
+      assert_no_error_reported { perform(retryable: false) }
+
+      @run.reload
+      assert_predicate @run, :failed?
+      assert_nil @run.result
+      assert_equal "video-1", @run.remote_job_id
+      assert_equal "プロバイダーのエラー", @run.failure["kind"]
+      assert_equal "Video generation failed: expired", @run.failure["message"]
+    end
+
+    test "keeps no id when leaving the work with the provider fails" do
+      FakeHandler.outcome = -> { raise RubyLLM::RateLimitError, "Rate limit reached" }
+
+      assert_no_error_reported { perform(retryable: false) }
+
+      @run.reload
+      assert_predicate @run, :failed?
+      assert_nil @run.remote_job_id
+      assert_empty FakeHandler.resumed
+    end
+
+    test "waits for the work kept with a run when its job runs again, instead of leaving it once more" do
+      started_at = 2.minutes.ago.change(usec: 0)
+      @run.update!(started_at: started_at, remote_job_id: "video-1", trace_ids: [ "11111111111111111111111111111111" ])
+
+      workflow_span = with_tracing { perform(retryable: false) }
+
+      @run.reload
+      assert_empty FakeHandler.calls
+      assert_equal [ "video-1" ], FakeHandler.resumed
+      assert_equal [ { model: "gpt-5-nano" } ], FakeHandler.resumed_models
+      assert_equal started_at, @run.started_at
+      assert_predicate @run, :succeeded?
+      assert_equal({ "answer" => "Refunded." }, @run.result)
+      assert_equal [ "11111111111111111111111111111111", workflow_span.hex_trace_id ], @run.trace_ids
+    end
+
+    test "waits for the kept work even for a scenario that may start over" do
+      @run.update!(started_at: 1.minute.ago, remote_job_id: "video-1")
+
+      perform(retryable: true)
+
+      assert_empty FakeHandler.calls
+      assert_equal [ "video-1" ], FakeHandler.resumed
+      assert_predicate @run.reload, :succeeded?
     end
 
     test "passes the inputs and the models to the handler as keywords" do
@@ -122,6 +208,22 @@ module Demos
       assert_predicate @run.reload, :failed?
       assert_equal "IOError", @run.failure["kind"]
       assert_equal "disk full", @run.failure["message"]
+      assert_nil @run.result
+      assert_empty @run.generated_files
+    end
+
+    test "fails a run whose generated video could not be downloaded, keeping nothing of its result" do
+      video = RubyLLM::Video.new(url: "https://vidgen.x.ai/expired.mp4", mime_type: "video/mp4", model: "grok-imagine-video-1.5")
+      video.define_singleton_method(:to_blob) { raise Faraday::ResourceNotFound, "the server responded with status 404" }
+      FakeHandler.outcome = { "video" => video, "model" => "grok-imagine-video-1.5" }
+
+      assert_no_error_reported { perform }
+
+      @run.reload
+      assert_predicate @run, :failed?
+      assert_equal "取得の失敗", @run.failure["kind"]
+      assert_equal "Faraday::ResourceNotFound", @run.failure["error_class"]
+      assert_equal "the server responded with status 404", @run.failure["message"]
       assert_nil @run.result
       assert_empty @run.generated_files
     end
@@ -268,6 +370,7 @@ module Demos
 
       assert_empty FakeHandler.calls
       assert_equal [ @run.chat_id ], FakeHandler.resumed.map(&:id)
+      assert_equal [ {} ], FakeHandler.resumed_models, "a chat is continued without the models"
       assert_predicate @run.reload, :succeeded?
       assert_equal({ "answer" => "Refunded." }, @run.result)
       assert_equal started_at, @run.started_at

@@ -66,8 +66,21 @@ module Demos
       # Solid Queue does not run a dead worker's jobs again, so their runs
       # would otherwise stay running forever. A run waiting for approval has
       # no job, so it is never among them.
+      #
+      # A run that keeps the id of work left with the provider is queued
+      # again rather than failed: the work goes on at the provider, and the
+      # job waits for it from the id, which only reads its state and costs
+      # nothing. So a result that finished while the app was down still
+      # reaches the history. Waiting cannot kill a worker, so there is no
+      # limit on how often this repeats. Any other run fails.
       def fail_abandoned!(run_ids, message: nil)
-        running.where(id: run_ids).find_each { |run| run.fail_as!(FailureKinds::WORKER_LOST, message:) }
+        running.where(id: run_ids).find_each do |run|
+          if run.remote_job_id
+            RunJob.perform_later(run)
+          else
+            run.fail_as!(FailureKinds::WORKER_LOST, message:)
+          end
+        end
       end
 
       private
@@ -107,24 +120,30 @@ module Demos
     # view finds the file from the result's key alone. A key names one file
     # per run.
     #
+    # Every file's bytes are read before the transaction opens. A Video or
+    # an Image that holds only a URL, as xAI returns one, downloads itself
+    # from the provider in to_blob, and SQLite takes its write lock when a
+    # transaction begins, so a download inside one would hold up every other
+    # write for as long as it takes. to_blob keeps nothing, so each file is
+    # read once. A download that fails raises before anything is written.
+    # The download is done here rather than by the scenario's handler: since
+    # to_blob keeps nothing, a handler that fetched first would have to wrap
+    # the bytes in a type of this app's, and the demo shows its code as
+    # RubyLLM code.
+    #
     # The files are uploaded inside the transaction that records the result,
     # so a failure part way leaves no attachment, no result, and the status
     # as it was. A file already written to the storage may remain there.
-    #
-    # A Video or an Image that holds only a URL downloads itself from the
-    # provider in to_blob, inside that transaction.
-    # TODO(when the product video scenario is implemented): decide whether
-    # its handler fetches the video first, keeping the download out of the
-    # transaction.
     def succeed!(result)
       refuse_transition!("succeeded")
 
+      bytes = result.to_h.select { |_, value| generated_file?(value) }.transform_values(&:to_blob)
       transaction do
         blobs = []
         kept = result.to_h do |key, value|
-          next [ key, value ] unless generated_file?(value)
+          next [ key, value ] unless bytes.key?(key)
 
-          blob = upload_generated_file(key.to_s, value)
+          blob = upload_generated_file(key.to_s, value, bytes.fetch(key))
           blobs << blob
           [ key, { "filename" => blob.filename.to_s, "content_type" => blob.content_type, "byte_size" => blob.byte_size } ]
         end
@@ -195,6 +214,23 @@ module Demos
       RunJob.perform_later(self)
     end
 
+    # Keeps the id of the work a scenario left with the provider, such as a
+    # video being generated, so that a job that runs again waits for that
+    # work instead of leaving it, and paying for it, once more. The status
+    # stays running: that the provider is still at work shows in the id
+    # being kept. Only a running run without an id takes one.
+    def record_remote_job_id!(id)
+      raise ArgumentError, "The id of the work left with the provider is blank" if id.blank?
+      # The status does not change, so the transition validation does not
+      # run and cannot refuse this.
+      unless running? && remote_job_id.nil?
+        errors.add(:remote_job_id, :not_recordable, message: "は #{status} の実行、または控え済みの実行には控えられない")
+        raise ActiveRecord::RecordInvalid, self
+      end
+
+      update!(remote_job_id: id)
+    end
+
     def add_trace_id!(trace_id)
       update!(trace_ids: trace_ids + [ trace_id ]) unless trace_ids.include?(trace_id)
     end
@@ -234,9 +270,9 @@ module Demos
 
     # The generator's content type is kept as given rather than guessed
     # from the bytes.
-    def upload_generated_file(key, file)
+    def upload_generated_file(key, file, bytes)
       ActiveStorage::Blob.create_and_upload!(
-        io: StringIO.new(file.to_blob), filename: generated_filename(key, file), content_type: file.mime_type, identify: false
+        io: StringIO.new(bytes), filename: generated_filename(key, file), content_type: file.mime_type, identify: false
       )
     end
 

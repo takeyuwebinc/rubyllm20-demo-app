@@ -9,6 +9,14 @@ module ScreenHelpers
     RubyLLM.config.openai_api_key = original
   end
 
+  def with_xai_key(value)
+    original = RubyLLM.config.xai_api_key
+    RubyLLM.config.xai_api_key = value
+    yield
+  ensure
+    RubyLLM.config.xai_api_key = original
+  end
+
   def with_anthropic_key(value)
     original = RubyLLM.config.anthropic_api_key
     RubyLLM.config.anthropic_api_key = value
@@ -89,6 +97,42 @@ module ScreenHelpers
       assert_select "dd", text: "mp3"
       assert_select "dd", text: "16 文字"
       assert_select "dd", text: "46.9 KB"
+      assert_select "*", text: /AI が生成したもの/
+    end
+  end
+
+  # A product video as xAI hands it back, holding only a URL. Its to_blob
+  # gives the bytes instead of downloading them.
+  def fake_video(bytes: "mp4 bytes", model: "grok-imagine-video-1.5", duration: 6)
+    video = RubyLLM::Video.new(url: "https://vidgen.x.ai/video-1.mp4", mime_type: "video/mp4", model: model, duration: duration)
+    video.define_singleton_method(:to_blob) { bytes }
+    video
+  end
+
+  # A run that generated a 6-second product video of 1.5 MB, with the video
+  # attached.
+  def create_product_video_run(duration: 6)
+    run = create_run(scenario_key: "generate_product_video", input: { "description" => "ステンレス製の電気ケトル。" }, remote_job_id: "video-1")
+    run.succeed!({
+      "video" => fake_video(bytes: "x" * 1_572_864, duration: duration), "model" => "grok-imagine-video-1.5", "job_id" => "video-1",
+      "duration" => duration, "resolution" => "480p", "aspect_ratio" => "16:9"
+    })
+    run
+  end
+
+  # The video of a run made by create_product_video_run, as the run page
+  # shows it.
+  def assert_shows_product_video(run)
+    file = run.generated_files.sole
+    assert_select "[data-product-video]" do
+      assert_select "video[controls][src=?]", rails_blob_path(file, only_path: true)
+      assert_select "a[href=?]", rails_blob_path(file, disposition: "attachment", only_path: true), text: "動画を保存する"
+      assert_select "[data-video-missing]", count: 0
+      assert_select "dd", text: "grok-imagine-video-1.5"
+      assert_select "dd", text: "6 秒"
+      assert_select "dd", text: "480p"
+      assert_select "dd", text: "16:9"
+      assert_select "dd", text: "1.5 MB"
       assert_select "*", text: /AI が生成したもの/
     end
   end

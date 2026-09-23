@@ -124,8 +124,17 @@ module Demos
       assert_equal true, scenario.retryable
     end
 
-    test "keeps the product video being prepared" do
-      refute_predicate Catalog.scenario("generate_product_video"), :implemented?
+    test "generates the product video with xAI from one required description, and never starts over" do
+      scenario = Catalog.scenario("generate_product_video")
+
+      assert_equal VideoAndSpeech::GenerateProductVideo, scenario.handler
+      assert_equal %w[xai], scenario.providers
+      assert_equal({ "model" => "grok-imagine-video-1.5" }, scenario.models)
+      assert_equal %w[description], scenario.inputs.map(&:name)
+      assert scenario.inputs.sole.required
+      assert_predicate scenario.inputs.sole.default, :present?
+      assert_equal "product_video", scenario.result_kind
+      assert_equal false, scenario.retryable
     end
 
     test "counts tokens with OpenAI from instructions and a question, and starts over when its job runs again" do

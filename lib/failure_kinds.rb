@@ -10,9 +10,10 @@ module FailureKinds
   PROVIDER_OUTAGE = "プロバイダー側の障害。時間をおいて実行する".freeze
   NETWORK = "ネットワークか、プロバイダー側の障害".freeze
 
-  # Checked in order with is_a?, so a subclass must come before its parent.
-  # ConfigurationError, ModelNotFoundError, and the Faraday errors do not
-  # inherit from RubyLLM::Error and are listed on their own.
+  # Checked in order with is_a?, so a subclass must come before its parent,
+  # and the base classes come last. ConfigurationError, ModelNotFoundError,
+  # and the Faraday errors do not inherit from RubyLLM::Error and are listed
+  # on their own.
   TABLE = {
     RubyLLM::UnauthorizedError => Kind.new(
       "認証の失敗",
@@ -51,7 +52,25 @@ module FailureKinds
       "モデルの識別子の誤り"
     ),
     Faraday::TimeoutError => Kind.new("タイムアウト", NETWORK),
-    Faraday::ConnectionFailed => Kind.new("接続の失敗", NETWORK)
+    Faraday::ConnectionFailed => Kind.new("接続の失敗", NETWORK),
+    # A generated video that holds only a URL is downloaded with Faraday
+    # directly, outside RubyLLM's error handling, and its URL is temporary.
+    Faraday::ClientError => Kind.new(
+      "取得の失敗",
+      "プロバイダーが取得を拒んだ（4xx）。動画の URL の期限切れなど。もう一度実行する"
+    ),
+    # RubyLLM turns the HTTP errors of its requests to a provider's API into
+    # its own errors. A bare Faraday error, such as a 5xx or a TLS failure,
+    # comes from its plain downloads instead: a generated video or image, an
+    # attachment given by URL, or the model registry.
+    Faraday::Error => Kind.new("取得の失敗", "#{NETWORK}。もう一度実行する"),
+    # RubyLLM raises the base class when a video or research job fails,
+    # expires, or runs out of time, and for an HTTP status it has no class
+    # for, such as 404.
+    RubyLLM::Error => Kind.new(
+      "プロバイダーのエラー",
+      "プロバイダーがエラーを返した。動画や調査の処理の失敗・期限切れ、待ち時間の上限、表にない HTTP のステータスなど。メッセージを確かめる"
+    )
   }.freeze
 
   # Not raised by a provider call: Solid Queue gives up on the jobs a dead

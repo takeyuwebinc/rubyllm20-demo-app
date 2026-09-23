@@ -18,6 +18,15 @@
 # .decide(chat, tool_call_id, approved:), which records the decision, and
 # .resume(chat), which continues the chat and again returns a result or the
 # chat if it stopped once more.
+#
+# An action that leaves work with the provider, such as a video that takes
+# minutes to generate, returns what RubyLLM returned for it, such as the
+# VideoJob of RubyLLM.animate_later: anything with id and pending?. The job
+# that runs the action keeps the id with the run right away, then calls
+# .resume(id, **models), which waits for the work to finish and returns a
+# result, or raises. A job that runs again after it was stopped calls
+# .resume with the kept id instead of #perform, so the work is neither
+# left nor paid for twice.
 class ApplicationAction
   def self.perform(...)
     new(...).perform
