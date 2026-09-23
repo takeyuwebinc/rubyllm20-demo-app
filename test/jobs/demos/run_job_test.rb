@@ -145,6 +145,23 @@ module Demos
       assert_equal [ "返品できますか。" ], chat.questions
     end
 
+    # With a fake key, a request that reached Anthropic would fail as a
+    # provider error and go unreported: the missing file is found first.
+    test "fails and reports a run whose document is missing, before calling the provider" do
+      run = Run.create!(scenario_key: "cite_return_policy", input: { "inquiry" => "返品できますか。" })
+      missing = Catalog.scenario("cite_return_policy").with(documents: [
+        Scenario::Document.new(name: "policy", label: "返品ポリシー", path: "documents/missing-policy.pdf")
+      ])
+      run.define_singleton_method(:scenario) { missing }
+
+      assert_error_reported(Errno::ENOENT) { RunJob.perform_now(run) }
+
+      assert_predicate run.reload, :failed?
+      assert_nil run.result
+      assert_equal "Errno::ENOENT", run.failure["kind"]
+      assert_match "missing-policy.pdf", run.failure["message"]
+    end
+
     test "does nothing for a finished run" do
       @run.succeed!({ "answer" => "done" })
 

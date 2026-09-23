@@ -11,7 +11,7 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
       assert_select "*", text: /推論、ツール、プロバイダー側のツール/
       assert_select "[data-availability]", text: "実行できる"
     end
-    assert_select "[data-demo='citations'] [data-availability]", text: "準備中"
+    assert_select "[data-demo='deep-research'] [data-availability]", text: "準備中"
   end
 
   test "names the missing provider in the list" do
@@ -237,10 +237,53 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
     assert_select "#count_tokens input[type=submit][value='実行する'][disabled]"
   end
 
-  test "shows a scenario being prepared without code or input" do
-    get demo_path("citations")
+  test "shows answering from the return policy as runnable with its explanation, sources, code, default inquiry, and the policy" do
+    with_anthropic_key("sk-ant-test") { get root_path }
 
+    assert_select "[data-demo='citations'] [data-availability]", text: "実行できる"
+
+    with_anthropic_key("sk-ant-test") { get demo_path("citations") }
+
+    assert_select "h2", text: "役立つケース"
+    assert_select "*", text: /回答の根拠を読み手が確かめる必要がある/
+    assert_select "*", text: /スキャンだけの PDF と、画像は引用できない/
+    assert_select "*", text: /添付した文書と出典は載らない/
+    assert_select "h2", text: "使わない場合に困ること"
+    assert_select "*", text: /引用が文書に実在するかを照合する仕組み/
+    assert_select "a[href='https://rubyllm.com/citations/'][target='_blank']"
+    assert_select "a[href='https://rubyllm.com/whats-new-in-2-0/#citations'][target='_blank']"
+    assert_select "a[href='https://platform.claude.com/docs/en/build-with-claude/citations'][target='_blank']"
+    assert_select "a[href='https://platform.claude.com/docs/en/build-with-claude/pdf-support'][target='_blank']"
     assert_select "#cite_return_policy" do
+      assert_select "pre code", text: /\.with_citations/
+      assert_select "pre code", text: /ask\(@inquiry, with: @policy\)/
+      assert_select "pre code", text: /citations/
+      assert_select "[data-scenario-documents] a[href='/documents/return-policy.pdf'][target='_blank']", text: "返品ポリシー文書（PDF、3 ページ）"
+      assert_select "textarea[name='run[input][inquiry]']", text: /E-50712/
+      assert_select "textarea[name='run[input][policy]']", count: 0
+      assert_select "input[type=submit][value='実行する']:not([disabled])"
+    end
+  end
+
+  test "keeps answering from the return policy from running without Anthropic settings, even with OpenAI's" do
+    with_anthropic_key(nil) do
+      with_openai_key("sk-test") { get root_path }
+    end
+
+    assert_select "[data-demo='citations'] [data-availability]", text: "設定値が足りない（Anthropic）"
+
+    with_anthropic_key(nil) do
+      with_openai_key("sk-test") { get demo_path("citations") }
+    end
+
+    assert_select "#cite_return_policy [data-availability]", text: "設定値が足りない（Anthropic）"
+    assert_select "#cite_return_policy input[type=submit][value='実行する'][disabled]"
+  end
+
+  test "shows a scenario being prepared without code or input" do
+    get demo_path("tokenization")
+
+    assert_select "#tokenize_text" do
       assert_select "*", text: /準備中/
       assert_select "pre", count: 0
       assert_select "textarea", count: 0
@@ -249,11 +292,11 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
   end
 
   test "says the explanation comes with the scenario when a demo has none yet" do
-    get demo_path("citations")
+    get demo_path("deep-research")
 
     assert_select "h2", text: "役立つケース", count: 0
-    assert_select "*", text: /規約や契約のように/
-    assert_select "a[href='https://rubyllm.com/citations/']"
+    assert_select "*", text: /数分以上の待ち時間を許容して/
+    assert_select "a[href='https://rubyllm.com/hosted-research/']"
   end
 
   test "links each document of a scenario before its inputs, in a new tab, in the order of the definition" do

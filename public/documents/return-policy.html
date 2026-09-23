@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<!--
+  The return policy of the fictional EC site, the document the Citations demo
+  attaches. return-policy.pdf is made from this file once and kept in version
+  control; nothing makes it at run time. Remaking it changes the pages and
+  the quotes that earlier runs cited, so their sources no longer match the
+  PDF they link to.
+
+  How the PDF is made (headless Chromium, with UDEV Gothic JPDOC installed):
+
+    chromium --headless --no-pdf-header-footer \
+      --print-to-pdf=public/documents/return-policy.pdf \
+      public/documents/return-policy.html
+
+  The text must stay extractable: the model cites what the provider extracts
+  from each page, and a page that is only an image cannot be cited. Three
+  choices keep the quotes readable as plain text:
+
+  - The font is UDEV Gothic JPDOC, which Chromium embeds as a TrueType font.
+    With Noto Sans CJK JP, Chromium maps glyphs such as 日, 食, and 文 to
+    the Kangxi radical code points (U+2F47 and so on) that share them, and
+    the provider quotes those look-alike characters.
+  - Each sentence is a line of its own and short enough not to wrap. The
+    provider keeps the line breaks of the page, so a sentence that wraps is
+    quoted with a line break in the middle of a word.
+  - Headings and steps are numbered with a period, as in "2." The provider
+    ends a quote at such a number, and not at 。, so the numbers cut the
+    policy into quotes of one section or one step each. Each quote ends
+    with the number that follows it. Without them, every quote is a page.
+
+  Checked by hand when the PDF was made (2026-09-23), without a gem to read
+  PDFs: pdfinfo gives 3 pages and 58,524 bytes, far under the 24 MB above
+  which RubyLLM uploads a file instead of embedding it, the 32 MB limit of an
+  Anthropic request, and the 100 pages allowed for a model whose context
+  window is under 1M tokens. pdffonts gives both fonts as embedded CID
+  TrueType. pdftotext -f N -l N gives the text of each page, ending with its
+  "N / 3".
+-->
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>返品ポリシー</title>
+  <style>
+    @page { size: A4; margin: 0; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: "UDEV Gothic JPDOC", sans-serif;
+      font-size: 11pt;
+      line-height: 1.8;
+      color: #111827;
+    }
+    .page {
+      box-sizing: border-box;
+      width: 210mm;
+      height: 297mm;
+      padding: 25mm 22mm 15mm;
+      display: flex;
+      flex-direction: column;
+      break-after: page;
+      overflow: hidden;
+    }
+    .page:last-child { break-after: auto; }
+    h1 { font-size: 20pt; margin: 0 0 4mm; }
+    h2 { font-size: 14pt; margin: 9mm 0 2mm; border-bottom: 1px solid #d1d5db; padding-bottom: 1mm; }
+    p, ol, ul { margin: 0 0 1.5mm; }
+    li { margin-bottom: 1.5mm; }
+    .lead { color: #4b5563; }
+    footer { margin-top: auto; text-align: center; font-size: 10pt; color: #6b7280; }
+  </style>
+</head>
+<body>
+  <section class="page">
+    <h1>返品ポリシー</h1>
+    <p class="lead">家電と日用品を扱う架空の EC サイトの、返品の条件と手続きを定めます。</p>
+    <p class="lead">実在の店舗やサービスとは関係ありません。</p>
+
+    <h2>1. 返品できる期間</h2>
+    <p>商品の到着から 30 日以内であれば、返品を受け付けます。</p>
+    <p>到着日は、配送業者の記録にある配達完了の日とします。</p>
+    <p>30 日を過ぎた商品は、返品を受け付けません。</p>
+
+    <h2>2. 未開封の商品</h2>
+    <p>未開封の商品は、理由を問わず返品できます。</p>
+    <p>お客様のご都合による返品のため、返送の送料はお客様の負担となります。</p>
+
+    <h2>3. 開封済みの商品</h2>
+    <p>開封済みの商品は、初期不良または配送中の破損の場合に限り、返品できます。</p>
+    <p>この場合、返送の送料は当社の負担となります。</p>
+    <p>好みに合わなかったなど、お客様のご都合による開封済みの商品の返品は受け付けません。</p>
+
+    <footer>1 / 3</footer>
+  </section>
+
+  <section class="page">
+    <h2>4. 返品できない商品</h2>
+    <p>次の商品は、未開封であっても返品できません。</p>
+    <ul>
+      <li>食品</li>
+      <li>消耗品（交換用のフィルター、電池など）</li>
+      <li>セール品</li>
+    </ul>
+
+    <h2>5. 返品の手続き</h2>
+    <ol>
+      <li>サポートデスクに、注文番号と返品の理由をご連絡ください。</li>
+      <li>サポートデスクが返品を受け付けると、返品受付番号をお知らせします。</li>
+      <li>返品受付番号のお知らせから 7 日以内に、商品を返送してください。</li>
+    </ol>
+    <p>返送の伝票には、返品受付番号を書き添えてください。</p>
+
+    <footer>2 / 3</footer>
+  </section>
+
+  <section class="page">
+    <h2>6. 返金</h2>
+    <p>返金は、返品された商品の到着を当社で確認してから 7 営業日以内に行います。</p>
+    <p>返金は、ご注文の支払いに使った方法で行います。</p>
+
+    <h2>7. 交換</h2>
+    <p>初期不良の商品は、返金の代わりに、同じ商品への交換を選べます。</p>
+
+    <h2>8. 問い合わせ先</h2>
+    <p>サポートデスク（架空）</p>
+    <ul>
+      <li>メール: support@example.com</li>
+      <li>受付時間: 平日 10 時から 18 時まで</li>
+    </ul>
+
+    <footer>3 / 3</footer>
+  </section>
+</body>
+</html>

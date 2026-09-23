@@ -132,6 +132,39 @@ module Demos
       assert_not Catalog.scenario("tokenize_text").implemented?
     end
 
+    test "answers from the return policy with Anthropic, from one inquiry, and starts over when its job runs again" do
+      scenario = Catalog.scenario("cite_return_policy")
+
+      assert_equal Citations::AnswerFromReturnPolicy, scenario.handler
+      assert_equal %w[anthropic], scenario.providers
+      assert_equal %w[inquiry], scenario.inputs.map(&:name)
+      assert scenario.inputs.sole.required
+      assert_predicate scenario.inputs.sole.default, :present?
+      assert_equal [ Scenario::Document.new(name: "policy", label: "返品ポリシー文書（PDF、3 ページ）", path: "documents/return-policy.pdf") ], scenario.documents
+      assert_equal "cited_answer", scenario.result_kind
+      assert_equal true, scenario.retryable
+    end
+
+    # RubyLLM only warns when the registry says a model cannot cite, and
+    # sends the request anyway.
+    test "answers from the return policy with an Anthropic model that cites documents and takes PDFs" do
+      model = RubyLLM.models.find(Catalog.scenario("cite_return_policy").models.fetch("model"))
+
+      assert_equal "anthropic", model.provider
+      assert model.supports?(:citations)
+      assert_includes model.modalities.input, "pdf"
+    end
+
+    test "keeps every document a scenario defines under public/" do
+      documents = Catalog.scenarios.flat_map(&:documents)
+
+      assert_predicate documents, :any?
+      documents.each do |document|
+        assert_predicate document.absolute_path, :file?, document.path
+        assert document.absolute_path.to_s.start_with?("#{Rails.public_path}/"), document.path
+      end
+    end
+
     test "reads the documents of a scenario, in the order they are defined" do
       scenario = build_scenario("documents" => [
         { "name" => "policy", "label" => "返品ポリシー文書", "path" => "documents/return-policy.pdf" },
@@ -169,6 +202,7 @@ module Demos
         { "inputs" => [ input.("policy") ], "documents" => [ document.("policy") ] },
         { "models" => { "policy" => "claude-sonnet-5" }, "documents" => [ document.("policy") ] },
         { "inputs" => [ input.("model") ], "models" => { "model" => "claude-sonnet-5" } },
+        { "inputs" => [ input.("inquiry"), input.("inquiry") ] },
         { "documents" => [ document.("policy"), document.("policy") ] }
       ].each do |attributes|
         error = assert_raises(ArgumentError, attributes.inspect) { build_scenario(attributes) }
