@@ -120,24 +120,26 @@ module Demos
     # view finds the file from the result's key alone. A key names one file
     # per run.
     #
+    # Every file's bytes are read before the transaction opens. A Video or
+    # an Image that holds only a URL, as xAI returns one, downloads itself
+    # from the provider in to_blob, and SQLite takes its write lock when a
+    # transaction begins, so a download inside one would hold up every other
+    # write for as long as it takes. to_blob keeps nothing, so each file is
+    # read once. A download that fails raises before anything is written.
+    #
     # The files are uploaded inside the transaction that records the result,
     # so a failure part way leaves no attachment, no result, and the status
     # as it was. A file already written to the storage may remain there.
-    #
-    # A Video or an Image that holds only a URL downloads itself from the
-    # provider in to_blob, inside that transaction.
-    # TODO(when the product video scenario is implemented): decide whether
-    # its handler fetches the video first, keeping the download out of the
-    # transaction.
     def succeed!(result)
       refuse_transition!("succeeded")
 
+      bytes = result.to_h.select { |_, value| generated_file?(value) }.transform_values(&:to_blob)
       transaction do
         blobs = []
         kept = result.to_h do |key, value|
-          next [ key, value ] unless generated_file?(value)
+          next [ key, value ] unless bytes.key?(key)
 
-          blob = upload_generated_file(key.to_s, value)
+          blob = upload_generated_file(key.to_s, value, bytes.fetch(key))
           blobs << blob
           [ key, { "filename" => blob.filename.to_s, "content_type" => blob.content_type, "byte_size" => blob.byte_size } ]
         end
@@ -264,9 +266,9 @@ module Demos
 
     # The generator's content type is kept as given rather than guessed
     # from the bytes.
-    def upload_generated_file(key, file)
+    def upload_generated_file(key, file, bytes)
       ActiveStorage::Blob.create_and_upload!(
-        io: StringIO.new(file.to_blob), filename: generated_filename(key, file), content_type: file.mime_type, identify: false
+        io: StringIO.new(bytes), filename: generated_filename(key, file), content_type: file.mime_type, identify: false
       )
     end
 

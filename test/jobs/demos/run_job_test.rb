@@ -195,6 +195,21 @@ module Demos
       assert_empty @run.generated_files
     end
 
+    test "fails a run whose generated video could not be downloaded, keeping nothing of its result" do
+      video = RubyLLM::Video.new(url: "https://vidgen.x.ai/expired.mp4", mime_type: "video/mp4", model: "grok-imagine-video-1.5")
+      video.define_singleton_method(:to_blob) { raise Faraday::ResourceNotFound, "the server responded with status 404" }
+      FakeHandler.outcome = { "video" => video, "model" => "grok-imagine-video-1.5" }
+
+      perform
+
+      @run.reload
+      assert_predicate @run, :failed?
+      assert_equal "Faraday::ResourceNotFound", @run.failure["error_class"]
+      assert_equal "the server responded with status 404", @run.failure["message"]
+      assert_nil @run.result
+      assert_empty @run.generated_files
+    end
+
     test "fails a ticket workflow run whose step fails, and asks nothing after that step" do
       run = Run.create!(scenario_key: "run_ticket_workflow", input: { "ticket" => "電気ケトルの電源が入りません。" })
       chat = ScriptedChat.new(

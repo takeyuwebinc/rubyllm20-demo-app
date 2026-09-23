@@ -8,6 +8,28 @@ module Demos
     # A generated file without a format, as RubyLLM's Video and Image have none.
     GeneratedClip = Struct.new(:to_blob, :mime_type)
 
+    # A video that holds only a URL, as RubyLLM's Video from xAI does: every
+    # to_blob downloads it. It notes how many transactions were open at the
+    # time, and how often it was read.
+    class DownloadedClip
+      attr_reader :mime_type, :reads, :open_transactions
+
+      def initialize(bytes: "mp4 bytes", error: nil)
+        @bytes = bytes
+        @error = error
+        @mime_type = "video/mp4"
+        @reads = 0
+      end
+
+      def to_blob
+        @reads += 1
+        @open_transactions = Run.connection.open_transactions
+        raise @error if @error
+
+        @bytes
+      end
+    end
+
     test "starts a run with the given input and queues its job" do
       run = Run.start(runnable_scenario, "inquiry" => "Where is my order?")
 
@@ -109,6 +131,51 @@ module Demos
       assert_equal %w[speech.mp3 video.mp4], run.generated_files.map { |file| file.filename.to_s }.sort
       assert_equal({ "filename" => "speech.mp3", "content_type" => "audio/mpeg", "byte_size" => 3 }, run.result["speech"])
       assert_equal({ "filename" => "video.mp4", "content_type" => "video/mp4", "byte_size" => 9 }, run.result["video"])
+    end
+
+    test "downloads a generated file once, before the transaction that records the result opens" do
+      run = create_run
+      clip = DownloadedClip.new(bytes: "x" * 2_048)
+      outside = Run.connection.open_transactions
+
+      run.succeed!({ "video" => clip, "model" => "grok-imagine-video-1.5" })
+
+      assert_equal 1, clip.reads
+      assert_equal outside, clip.open_transactions
+      run.reload
+      assert_predicate run, :succeeded?
+      file = run.generated_files.sole
+      assert_equal "x" * 2_048, file.download
+      assert_equal({ "filename" => "video.mp4", "content_type" => "video/mp4", "byte_size" => 2_048 }, run.result["video"])
+    end
+
+    test "keeps nothing and stays running when downloading a generated file fails" do
+      run = create_run
+      clip = DownloadedClip.new(error: Faraday::ResourceNotFound.new("the server responded with status 404"))
+
+      assert_no_difference([ -> { ActiveStorage::Blob.count }, -> { ActiveStorage::Attachment.count } ]) do
+        error = assert_raises(Faraday::ResourceNotFound) { run.succeed!({ "video" => clip, "model" => "grok-imagine-video-1.5" }) }
+        assert_equal "the server responded with status 404", error.message
+      end
+
+      run.reload
+      assert_predicate run, :running?
+      assert_nil run.result
+      assert_nil run.finished_at
+      assert_empty run.generated_files
+    end
+
+    test "never downloads a generated file for a finished run or a run waiting for approval" do
+      runs = %w[succeeded failed cancelled].map { |status| create_run(status: status, finished_at: 1.minute.ago) }
+      runs << create_awaiting_run
+
+      runs.each do |run|
+        clip = DownloadedClip.new
+
+        assert_raises(ActiveRecord::RecordInvalid, run.status) { run.succeed!({ "video" => clip }) }
+
+        assert_equal 0, clip.reads, run.status
+      end
     end
 
     test "keeps no attachment for a result without generated files" do
