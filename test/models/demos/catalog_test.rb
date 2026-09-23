@@ -72,6 +72,20 @@ module Demos
       assert_equal "refund_decision", scenario.result_kind
     end
 
+    test "answers one inquiry with an OpenAI model that falls back to an Anthropic one, and starts over when its job runs again" do
+      scenario = Catalog.scenario("fall_back_to_another_provider")
+
+      assert_equal ModelFallbacks::AnswerWithFallback, scenario.handler
+      assert_equal %w[openai anthropic], scenario.providers
+      assert_equal "openai", RubyLLM.models.find(scenario.models.fetch("model")).provider
+      assert_equal "anthropic", RubyLLM.models.find(scenario.models.fetch("fallback_model")).provider
+      assert_equal %w[inquiry], scenario.inputs.map(&:name)
+      assert scenario.inputs.sole.required
+      assert_predicate scenario.inputs.sole.default, :present?
+      assert_equal "fallback_answer", scenario.result_kind
+      assert_equal true, scenario.retryable
+    end
+
     test "starts the web search over when its job runs again, from one question, on OpenAI" do
       scenario = Catalog.scenario("search_web")
 

@@ -540,6 +540,73 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-token-count] dt", text: "最大出力トークン数", count: 0
   end
 
+  test "shows the fallback answer, the model that gave it, the main model with its host, and the switch" do
+    run = create_fallback_run([ fallback_record ])
+
+    get run_path(run)
+
+    assert_select "[data-fallback-answer]" do
+      assert_select "*", text: "配送予定日は注文履歴から確認できます。"
+      assert_select "[data-answered-by]", text: /claude-haiku-4-5-20251001/
+      assert_select "[data-primary-model]", text: "gpt-5-nano"
+      assert_select "[data-primary-api-base]", text: "https://api.openai.invalid/v1"
+      assert_select "[data-no-fallback]", count: 0
+      assert_select "[data-fallback]", 1 do
+        assert_select "*", text: /試行 1/
+        assert_select "[data-fallback-from]", text: "OpenAI gpt-5-nano"
+        assert_select "[data-fallback-to]", text: "Anthropic claude-haiku-4-5"
+        assert_select "[data-error-kind]", text: "接続の失敗"
+        assert_select "code", text: "Faraday::ConnectionFailed"
+        assert_select "*", text: /api\.openai\.invalid:443/
+        assert_select "[data-fallback-outcome]", text: "予備モデルが応答した"
+      end
+    end
+  end
+
+  # The switch is what the demo is about, so a long answer must not push it
+  # out of sight.
+  test "puts the model that answered and the switches above the answer" do
+    get run_path(create_fallback_run([ fallback_record ]))
+
+    assert_before "[data-answered-by]", "[data-answer]"
+    assert_before "[data-fallback]", "[data-answer]"
+
+    get run_path(create_fallback_run([], model: "gpt-5-nano-2025-08-07"))
+
+    assert_before "[data-no-fallback]", "[data-answer]"
+  end
+
+  test "says the main model answered when nothing fell back" do
+    run = create_fallback_run([], model: "gpt-5-nano-2025-08-07")
+
+    get run_path(run)
+
+    assert_select "[data-fallback-answer]" do
+      assert_select "[data-answered-by]", text: /gpt-5-nano-2025-08-07/
+      assert_select "[data-no-fallback]", text: /主モデルが応答した/
+      assert_select "[data-fallback]", count: 0
+    end
+  end
+
+  test "names an error outside the failure kinds by its class alone" do
+    run = create_fallback_run([ fallback_record(error_class: "RubyLLM::ToolCallParseError") ])
+
+    get run_path(run)
+
+    assert_select "[data-fallback]" do
+      assert_select "[data-error-kind]", count: 0
+      assert_select "code", text: "RubyLLM::ToolCallParseError"
+    end
+  end
+
+  test "shows a switch whose fallback model failed as failed" do
+    run = create_fallback_run([ fallback_record(succeeded: false) ])
+
+    get run_path(run)
+
+    assert_select "[data-fallback] [data-fallback-outcome]", text: "予備モデルも失敗した"
+  end
+
   test "shows what failed, where, and the likely causes" do
     run = create_run.tap { |r| r.fail_with!(RubyLLM::RateLimitError.new("You exceeded your current quota")) }
 
@@ -778,5 +845,31 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
       "model" => "gpt-5-nano-2025-08-07"
     }.merge(review))
     run
+  end
+
+  # A fallback run as the action records it: the answer, the model that gave
+  # it, the main model with the host its requests were sent to, and each
+  # switch to the fallback model.
+  def create_fallback_run(fallbacks, model: "claude-haiku-4-5-20251001")
+    run = create_run(scenario_key: "fall_back_to_another_provider", input: { "inquiry" => "配送予定日を教えてください。" })
+    run.succeed!({
+      "answer" => "配送予定日は注文履歴から確認できます。",
+      "model" => model,
+      "primary_model" => "gpt-5-nano",
+      "primary_api_base" => "https://api.openai.invalid/v1",
+      "fallbacks" => fallbacks
+    })
+    run
+  end
+
+  def fallback_record(error_class: "Faraday::ConnectionFailed", succeeded: true)
+    {
+      "attempt" => 1,
+      "from" => { "provider" => "openai", "model" => "gpt-5-nano" },
+      "to" => { "provider" => "anthropic", "model" => "claude-haiku-4-5" },
+      "error_class" => error_class,
+      "error_message" => "Failed to open TCP connection to api.openai.invalid:443 (getaddrinfo(3): Name or service not known)",
+      "succeeded" => succeeded
+    }
   end
 end

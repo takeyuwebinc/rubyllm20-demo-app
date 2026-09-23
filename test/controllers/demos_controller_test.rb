@@ -274,6 +274,48 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
     assert_select "#count_tokens input[type=submit][value='実行する'][disabled]"
   end
 
+  test "shows the fallback as runnable with its explanation, sources, code, and default inquiry" do
+    with_openai_key("sk-test") { with_anthropic_key("sk-ant-test") { get root_path } }
+
+    assert_select "[data-demo='model-fallbacks'] [data-availability]", text: "実行できる"
+
+    with_openai_key("sk-test") { with_anthropic_key("sk-ant-test") { get demo_path("model-fallbacks") } }
+
+    assert_select "h2", text: "役立つケース"
+    assert_select "*", text: /max_retries/
+    assert_select "*", text: /予備モデルも失敗したとき/
+    assert_select "h2", text: "使わない場合に困ること"
+    assert_select "*", text: /rescue/
+    assert_select "a[href='https://rubyllm.com/error-handling/#model-fallbacks'][target='_blank']"
+    assert_select "a[href='https://rubyllm.com/whats-new-in-2-0/#model-fallbacks'][target='_blank']"
+    assert_select "a[href='https://rubyllm.com/configuration-connection/#timeouts--retries'][target='_blank']"
+    assert_select "a[href='https://rubyllm.com/instrumentation/#usage-events'][target='_blank']"
+    assert_select "#fall_back_to_another_provider" do
+      assert_select "pre code", text: /RubyLLM\.context/
+      assert_select "pre code", text: /with_fallbacks\(@fallback_model\)/
+      assert_select "pre code", text: /after_fallback/
+      assert_select "textarea[name='run[input][inquiry]']", text: /E-61294/
+      assert_select "input[type=submit][value='実行する']:not([disabled])"
+    end
+  end
+
+  test "names the provider whose settings the fallback lacks, and keeps it from running" do
+    {
+      [ nil, "sk-ant-test" ] => "設定値が足りない（OpenAI）",
+      [ "sk-test", nil ] => "設定値が足りない（Anthropic）",
+      [ nil, nil ] => "設定値が足りない（OpenAI、Anthropic）"
+    }.each do |(openai_key, anthropic_key), availability|
+      with_openai_key(openai_key) { with_anthropic_key(anthropic_key) { get root_path } }
+
+      assert_select "[data-demo='model-fallbacks'] [data-availability]", text: availability
+
+      with_openai_key(openai_key) { with_anthropic_key(anthropic_key) { get demo_path("model-fallbacks") } }
+
+      assert_select "#fall_back_to_another_provider [data-availability]", text: availability
+      assert_select "#fall_back_to_another_provider input[type=submit][value='実行する'][disabled]"
+    end
+  end
+
   test "shows a scenario being prepared without code or input" do
     get demo_path("citations")
 
