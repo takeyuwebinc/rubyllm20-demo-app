@@ -491,6 +491,20 @@ module Observability
       assert_equal "grok-4.3", attributes["gen_ai.request.model"]
     end
 
+    # A String has a count that takes an argument, so calling it fails.
+    test "reports a result whose count fails, and keeps the other attributes of the tokenization" do
+      assert_error_reported(ArgumentError) do
+        instrument("tokenization.ruby_llm", tokenization_payload) { |payload| payload[:result] = "not a tokenization" }
+      end
+
+      attributes = span("tokenization grok-4.3").attributes
+
+      assert_not_includes attributes.keys, "ruby_llm.tokenization.count"
+      assert_equal "tokenization", attributes["ruby_llm.operation"]
+      assert_equal "xai", attributes["gen_ai.provider.name"]
+      assert_equal "grok-4.3", attributes["gen_ai.request.model"]
+    end
+
     test "counts the tokens of a tokenized text when content capture is off" do
       ActiveSupport::Notifications.unsubscribe(@subscription)
       @subscription = ActiveSupport::Notifications.subscribe(/\.ruby_llm\z/, RubyLLMSpanSubscriber.new(tracer: @provider.tracer("test"), capture_content: false))
