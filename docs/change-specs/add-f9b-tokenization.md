@@ -56,7 +56,7 @@ RubyLLM 2.0.0 のテキストの分割の仕様は次のとおりである（gem
 | `test/lib/failure_kinds_test.rb` | 失敗の種類の変換の検証 |
 | `test/subscribers/observability/ruby_llm_span_subscriber_test.rb` | 購読者の検証 |
 | `test/controllers/demos_controller_test.rb`、`test/controllers/demos/runs_controller_test.rb`、`test/controllers/runs_controller_test.rb` | 画面と実行の指示の検証 |
-| `docs/api-keys.md` | xAI の設定値の取得手順。`RubyLLM.tokenize` に xAI が要ることを既に記している。変更しない |
+| `docs/api-keys.md` | xAI の設定値の取得手順と Sentry の設定手順。Sentry の Safe Fields の手順を足す |
 
 ## 変更内容
 
@@ -93,7 +93,8 @@ sequenceDiagram
   - 文字列が空のトークン（文字の途中で割れたトークン）は、文字列の代わりにバイト列を 2 桁の小文字の 16 進を空白で区切った形（例: `f0 9f 99`）で表示し、断片であることが読み取れる目印を付ける。空のまま表示すると、トークンがないように見えるためである
   - トークンが 1 つだけの結果も同じ形で表示する。トークンの列の件数は制限せず、長いテキストの結果はそのままの件数で描画する
 - **変更**: 購読者 `Observability::RubyLLMSpanSubscriber`。`tokenization.ruby_llm` の終了時に payload の `result` があり、それが `count` に応答するときに限り、その値を属性 `ruby_llm.tokenization.count` としてスパンに載せる
-  - `result` を読むのは、gem のソースだけを根拠にした結合である。`count` に応答しない値なら載せずに済ませ、他の属性を失わない
+  - `result` を読むのは、gem のソースだけを根拠にした結合である。`count` に応答しない値なら載せずに済ませ、他の属性を失わない。`count` に応答しても呼ぶと例外になる値（`String` など）は、例外を報告したうえで載せずに済ませ、他の属性を失わない
+  - Sentry の既定のデータスクラビングは、名前に `token` を含む属性を消す（数値の属性は属性ごと消える。2026-09-23 に試験用のスパンで確認）。Sentry のプロジェクトの Safe Fields に `'ruby_llm.tokenization.count'` を引用符ごと加えて除外する（引用符がないと、名前のドットがパスの区切りと解釈されて効かない）。設定はリポジトリの外にあるので、`docs/api-keys.md` の Sentry の手順に加える
   - 既存の属性と、失敗時の `error.type`、`error.message`、status の扱いは変えない。`sentry.op` は付けない（GenAI の操作に分割はない）
   - テキストの本文は載せない。payload に含まれず、応答から組み立て直すのは本文の記録ではない
   - トークン数は本文ではないので、`capture_content` の真偽によらず載せる
@@ -130,7 +131,9 @@ sequenceDiagram
 - 新規: 代表シナリオの処理のファイル、結果の表示部品
 - `app/subscribers/observability/ruby_llm_span_subscriber.rb`: 分割のスパンに属性を 1 つ足す。他のイベントのスパンは変わらない
 - `test/test_helper.rb`: xAI の偽の設定値を、OpenAI と同じ理由（テストがプロバイダーを呼ばず、開発者の `.env` に依存しない）で固定する。`test/support/screen_helpers.rb`: xAI の設定値を固定する補助 `with_xai_key` を加える
-- `app/models/`、`app/jobs/`、`app/controllers/`、`app/views/runs/_details.html.erb`、`app/views/demos/_scenario.html.erb`、`lib/failure_kinds.rb`、`config/initializers/`、`db/schema.rb`、`docs/api-keys.md`: 変更なし。表示部品は既存の仕組みで名前から描画され、入力欄は代表シナリオ定義から描画される。入力欄の注記「入力の本文は Sentry に送られる」は、F9b では本文が Sentry に載らないが xAI には送られるので、そのまま残す
+- `docs/api-keys.md`: Sentry の手順に Safe Fields の設定を加え、注意点に既定のデータスクラビングが消す属性を書く。使用量の試行スパンの `ruby_llm.attempt.input_tokens` と `ruby_llm.attempt.output_tokens` も同じ理由で Sentry に載っていないが、この ChangeSpec では扱わない（利用者の判断で別途対応）
+- Sentry のプロジェクトの設定: Safe Fields に `'ruby_llm.tokenization.count'` を加える
+- `app/models/`、`app/jobs/`、`app/controllers/`、`app/views/runs/_details.html.erb`、`app/views/demos/_scenario.html.erb`、`lib/failure_kinds.rb`、`config/initializers/`、`db/schema.rb`: 変更なし。表示部品は既存の仕組みで名前から描画され、入力欄は代表シナリオ定義から描画される。入力欄の注記「入力の本文は Sentry に送られる」は、F9b では本文が Sentry に載らないが xAI には送られるので、そのまま残す
 - Sentry でのトレースの形: ジョブの `invoke_agent` の下に `tokenization grok-4.3`（`ruby_llm.tokenization.count` と、実行の会話 ID を持つ）があり、その下に `http.client`（`POST tokenize-text`）がある。`gen_ai.chat` のスパンと使用量のスパンはない。実装後に画面で確かめる。開発中のジョブのワーカーはコードを再読み込みしないので、確かめる前にサーバーをホット再起動する
 - 実行の画面と履歴: 長いテキストの結果は、トークンの数だけ要素を描画し、`result` 列はトークン 1 つあたり約 50 バイトで大きくなる（33,000 文字で 18,000 個、約 1MB）。履歴の一覧とデモの画面の最近の実行は `result` 列も読むので、長い結果が並ぶと読み込みが重くなる。自習用で既定の入力は短いため、件数の制限も列の読み飛ばしも設けずに許容する
 - テスト
@@ -157,11 +160,11 @@ sequenceDiagram
 | AC-5 | 処理 | 状態・権限 | 開始済みの実行でジョブが再び動くと、もう一度分割して成功する（分割は何も変えない） | テスト（カタログの `retryable` が真であることと、既存のジョブの検証） |
 | AC-6 | 表示 | 正常 | 成功した F9b の実行の画面に、トークン数が 3 桁区切りで（1,000 以上の値で確かめる）、モデルの識別子が、トークンの列がテキストの順に表示され、各トークンに文字列と ID が出る。先頭や末尾に空白を持つトークンは、空白を含めて表示される | テスト |
 | AC-7 | 表示 | 異常・拒否 | 該当なし（表示は入力を受け取らず、失敗した実行では結果の表示部品は描画されない。既存の扱い） | |
-| AC-8 | 表示 | 境界 | 文字列が空のトークンは、バイト列が 2 桁の小文字の 16 進を空白で区切った形で表示され、断片であることの目印が付く。トークンが 1 つだけの結果は、トークン数 1 とその 1 つが表示される | テスト |
+| AC-8 | 表示 | 境界 | 文字列が空のトークンは、バイト列が 2 桁の小文字の 16 進を空白で区切った形で表示され、断片であることの目印（点線の枠）が付く。文字列が空のトークンが 1 つでもある結果には目印を説明する凡例が出て、1 つもない結果には出ない。トークンが 1 つだけの結果は、トークン数 1 とその 1 つが表示される | テスト |
 | AC-9 | 表示 | 境界 | 改行とタブを含むトークンは、改行とタブが保持されて表示される。`<` などの HTML の特殊文字を含むトークンは、エスケープされて文字として表示される。20,000 個のトークンを持つ結果も、すべてのトークンが描画される | テスト |
 | AC-10 | 表示 | 状態・権限 | 該当なし（表示部品は成功した実行でだけ描画される。既存の扱い） | |
 | AC-11 | 購読者 | 正常 | 結果を持つ `tokenization.ruby_llm` のイベントから、`tokenization <モデル>` のスパンが作られ、`ruby_llm.tokenization.count` が結果の `count` と等しく、既存の属性（`ruby_llm.operation`、`gen_ai.provider.name`、`gen_ai.request.model` と、workflow の内側なら `gen_ai.agent.name`、`gen_ai.conversation.id`）が従来どおり載る | テスト |
-| AC-12 | 購読者 | 異常・拒否 | 例外で終わった `tokenization.ruby_llm` のイベントからは、`ruby_llm.tokenization.count` のないスパンが作られ、`error.type`、`error.message` と失敗の status が載る（既存の扱い）。`count` に応答しない結果を持つイベントからは、`ruby_llm.tokenization.count` のないスパンが作られ、既存の属性は保たれる | テスト |
+| AC-12 | 購読者 | 異常・拒否 | 例外で終わった `tokenization.ruby_llm` のイベントからは、`ruby_llm.tokenization.count` のないスパンが作られ、`error.type`、`error.message` と失敗の status が載る（既存の扱い）。`count` に応答しない結果を持つイベントからは、`ruby_llm.tokenization.count` のないスパンが作られ、既存の属性は保たれる。`count` に応答するが呼ぶと例外になる結果を持つイベントからは、例外が報告され、`ruby_llm.tokenization.count` のないスパンが作られ、既存の属性は保たれる | テスト |
 | AC-13 | 購読者 | 境界 | 該当なし（トークン数は結果の値をそのまま載せ、閾値や丸めを持たない） | |
 | AC-14 | 購読者 | 状態・権限 | `capture_content` が偽の購読者でも、`ruby_llm.tokenization.count` が載る | テスト |
 | AC-15 | デモ定義 | 正常 | OpenAI と xAI の設定値があるとき、デモの画面の `tokenize_text` が「実行できる」になり、説明文の本文に分割の段落、6 つの出典、`tokenize` を含むコード断片、既定のテキストが入った入力欄、有効な実行ボタンが出る。定義したモデルは `provider: :xai` で xAI の登録簿に解決される | テスト |
