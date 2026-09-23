@@ -403,6 +403,19 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-remote-job-id] code", text: "video-1"
   end
 
+  test "shows what failed instead of a product video, and the id of the work left with xAI" do
+    run = create_run(scenario_key: "generate_product_video", input: { "description" => "電気ケトル" }, remote_job_id: "video-1")
+    run.fail_with!(RubyLLM::Error.new("Video generation timed out after 1800 seconds"))
+
+    get run_path(run)
+
+    assert_select "[data-run-status]", text: "失敗"
+    assert_select "[data-product-video]", count: 0
+    assert_select "[data-failure]", text: /プロバイダーのエラー（XAI）/
+    assert_select "[data-failure]", text: /timed out after 1800 seconds/
+    assert_select "[data-remote-job-id] code", text: "video-1"
+  end
+
   # A video element plays only what is served inline, and seeks with ranges.
   test "serves the generated video inline, and in part when a range is asked for" do
     run = create_product_video_run

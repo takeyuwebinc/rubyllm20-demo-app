@@ -183,6 +183,7 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
     assert_select "*", text: /480p が 1 秒 0\.08 ドル、720p が 0\.14 ドル、1080p が 0\.25 ドル/
     assert_select "*", text: /ID から `?VideoJob`? を開き直す公開の API がない/
     assert_select "*", text: /一時的な URL/
+    assert_select "*", text: /cost_in_usd_ticks/
     assert_select "*", text: /状態の問い合わせの繰り返し/
     assert_select "*", text: /:completed/
     assert_select "h2 + ul > li > a[target='_blank']", 8

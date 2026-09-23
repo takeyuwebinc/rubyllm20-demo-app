@@ -73,8 +73,10 @@ module Demos
     test "keeps the id of the work the scenario left with the provider, then waits for it in the same trace" do
       FakeHandler.outcome = RemoteJob.new(id: "video-1")
       kept_before_waiting = nil
+      trace_while_waiting = nil
       FakeHandler.resume_outcome = lambda do
         kept_before_waiting = Run.find(@run.id).remote_job_id
+        trace_while_waiting = OpenTelemetry::Trace.current_span.context.hex_trace_id
         { "answer" => "A video of the kettle." }
       end
 
@@ -82,6 +84,7 @@ module Demos
 
       @run.reload
       assert_equal "video-1", kept_before_waiting
+      assert_equal workflow_span.hex_trace_id, trace_while_waiting, "waits inside the workflow"
       assert_equal "video-1", @run.remote_job_id
       assert_equal [ "video-1" ], FakeHandler.resumed
       assert_equal [ { model: "gpt-5-nano" } ], FakeHandler.resumed_models
@@ -305,6 +308,7 @@ module Demos
 
       assert_empty FakeHandler.calls
       assert_equal [ @run.chat_id ], FakeHandler.resumed.map(&:id)
+      assert_equal [ {} ], FakeHandler.resumed_models, "a chat is continued without the models"
       assert_predicate @run.reload, :succeeded?
       assert_equal({ "answer" => "Refunded." }, @run.result)
       assert_equal started_at, @run.started_at
