@@ -58,6 +58,7 @@ class FailureKindsTest < ActiveSupport::TestCase
     assert_nil FailureKinds.for_class_name("RubyLLM::NoSuchError")
     assert_nil FailureKinds.for_class_name("not a constant")
     assert_nil FailureKinds.for_class_name("RubyLLM::VERSION")
+    assert_nil FailureKinds.for_class_name("RubyLLM::VERSION::Error")
     assert_nil FailureKinds.for_class_name(nil)
     assert_nil FailureKinds.for_class_name("")
   end

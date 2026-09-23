@@ -82,7 +82,7 @@ module FailureKinds
     return unless error_class.is_a?(Class)
 
     TABLE.find { |table_class, _| error_class <= table_class }&.last
-  rescue NameError
+  rescue NameError, TypeError # TypeError: a name under a constant that is not a module
     nil
   end
 
