@@ -7,6 +7,9 @@ module ProviderTools
   # together with the code and its outputs. There is no place of the app's
   # own to run code in, and no tool of its own to write.
   class AnswerWithCodeExecution < ApplicationAction
+    # No files or images: with OpenAI, RubyLLM does not fetch what the code
+    # writes. A file comes back only as a citation, and an image only as an
+    # output with a URL.
     INSTRUCTIONS = <<~TEXT
       あなたは、家電と日用品を扱う架空の EC サイトのサポートデスクの担当者です。
       与えられた注文データを、コードを実行して集計してください。暗算で求めないでください。
@@ -23,19 +26,25 @@ module ProviderTools
       chat = RubyLLM.chat(model: @model)
                     .with_instructions(INSTRUCTIONS)
                     .with_provider_tools(:code_execution)
+                    # One call with symbol keys: a later call replaces the
+                    # options, and only a symbol key replaces RubyLLM's own.
                     .with_provider_options(
                       # OpenAI leaves out what the code printed unless asked
                       # for it. These options replace RubyLLM's own, so its
-                      # default, the encrypted reasoning, is listed too.
+                      # default in 2.0.0, the encrypted reasoning, is listed too.
                       include: [
                         "reasoning.encrypted_content",
                         "code_interpreter_call.outputs"
                       ],
                       # with_tool_options(choice:) is sent only with tools of
-                      # the app's own, so the provider's own word is used to
-                      # make the model run code rather than answer from memory.
+                      # the app's own, so the provider's own word is used.
+                      # Code execution is the only tool on, so requiring a tool
+                      # makes the model run code rather than answer from memory.
                       tool_choice: "required"
                     )
+      # The order data goes in the message rather than as a file in the
+      # container: there is no file to upload and delete, and the data shows
+      # in the conversation that Sentry records.
       response = chat.ask(<<~TEXT)
         #{@request}
 
