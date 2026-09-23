@@ -18,6 +18,15 @@
 # .decide(chat, tool_call_id, approved:), which records the decision, and
 # .resume(chat), which continues the chat and again returns a result or the
 # chat if it stopped once more.
+#
+# An action that leaves work with a provider, such as a batch that takes
+# hours, returns that work as RubyLLM returned it, such as the
+# RubyLLM::Batch, instead of a result. The run keeps its id, and the action
+# neither waits for the provider nor needs the app to stay up meanwhile.
+# Its class then also has .check(id), which asks the provider how the work
+# is doing and returns it again, and .resume(id), which collects the work
+# once it has ended, however it ended, and returns the result. A job calls
+# .check every minute until the work ends, and then .resume.
 class ApplicationAction
   def self.perform(...)
     new(...).perform

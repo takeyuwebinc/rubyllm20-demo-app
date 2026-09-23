@@ -19,8 +19,77 @@ module Demos
       end
     end
 
+    # Stands in for a handler that leaves a batch with the provider.
+    class BatchHandler
+      class << self
+        attr_accessor :calls, :batch
+
+        def check(id)
+          (self.calls ||= []) << [ :check, id ]
+          batch
+        end
+
+        def resume(id)
+          (self.calls ||= []) << [ :resume, id ]
+          { "tickets" => [] }
+        end
+      end
+    end
+
+    include BatchHelpers
+
+    REMOTE_JOB = { "kind" => "batch", "id" => "batch_1", "provider" => "openai", "raw_status" => "validating" }.freeze
+
     setup do
       @config = RubyLLM::Configuration.new
+    end
+
+    test "asks its handler about the work the run left with the provider, and reads the answer" do
+      BatchHandler.calls = []
+      BatchHandler.batch = openai_batch(raw_status: "in_progress", request_counts: { "total" => 5, "completed" => 2, "failed" => 1 })
+
+      state = scenario(handler_name: BatchHandler.name).check(REMOTE_JOB)
+
+      assert_equal [ [ :check, "batch_1" ] ], BatchHandler.calls
+      assert_equal Scenario::RemoteState.new(
+        kind: "batch", id: "batch_1", provider: "openai", status: :pending,
+        raw_status: "in_progress", request_counts: { "total" => 5, "completed" => 2, "failed" => 1 }
+      ), state
+      assert_predicate state, :pending?
+    end
+
+    test "reads a batch as pending until it ends, and then by how it ended" do
+      {
+        "validating" => :pending, "in_progress" => :pending, "finalizing" => :pending, "cancelling" => :pending,
+        "completed" => :succeeded, "expired" => :failed, "failed" => :failed, "cancelled" => :cancelled
+      }.each do |raw_status, status|
+        state = scenario.remote_state(openai_batch(raw_status:))
+
+        assert_equal status, state.status, raw_status
+        assert_equal raw_status, state.raw_status
+      end
+    end
+
+    test "passes the counts of a batch on as the provider reported them, or nil" do
+      assert_nil scenario.remote_state(openai_batch(request_counts: nil)).request_counts
+    end
+
+    test "refuses to read a value it knows no reading for" do
+      assert_raises(ArgumentError) { scenario.remote_state(Struct.new(:id, :status).new("job_1", :pending)) }
+    end
+
+    test "hands the id of the work to its handler to collect it" do
+      BatchHandler.calls = []
+
+      assert_equal({ "tickets" => [] }, scenario(handler_name: BatchHandler.name).resume(REMOTE_JOB))
+      assert_equal [ [ :resume, "batch_1" ] ], BatchHandler.calls
+    end
+
+    test "cannot check on or collect work for a handler that leaves none with a provider" do
+      scenario = scenario(handler_name: "ResponsesApi::AnswerInquiry")
+
+      assert_raises(NoMethodError) { scenario.check(REMOTE_JOB) }
+      assert_raises(NoMethodError) { scenario.resume(REMOTE_JOB) }
     end
 
     test "hands a decision and a resumption to its handler" do

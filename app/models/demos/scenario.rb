@@ -14,6 +14,17 @@ module Demos
       def preparing? = state == :preparing
     end
 
+    # Work a handler left with a provider, read the same way whatever kind
+    # of work it is. The status is :pending until the work ends, and then
+    # :succeeded, :failed, or :cancelled. raw_status is the provider's own
+    # word for it, and request_counts its tally, as the provider reported
+    # them.
+    RemoteState = Data.define(:kind, :id, :provider, :status, :raw_status, :request_counts) do
+      def pending? = status == :pending
+      def succeeded? = status == :succeeded
+      def cancelled? = status == :cancelled
+    end
+
     def demo
       Catalog.demo(demo_key)
     end
@@ -69,12 +80,49 @@ module Demos
       handler.decide(chat, tool_call_id, approved:)
     end
 
-    # Continues the run's chat after a decision. Returns as perform does.
-    def resume(chat)
-      handler.resume(chat)
+    # Continues the run's chat after a decision, or collects the work the
+    # run left with the provider once that work has ended: the handler is
+    # given the chat, or the id of the work. Returns as perform does.
+    def resume(chat_or_remote_job)
+      if chat_or_remote_job.is_a?(Hash)
+        handler.resume(chat_or_remote_job.fetch("id"))
+      else
+        handler.resume(chat_or_remote_job)
+      end
+    end
+
+    # Asks the handler how the work the run left with the provider is doing.
+    # Only a handler that leaves work with a provider has this.
+    def check(remote_job)
+      remote_state(handler.check(remote_job.fetch("id")))
+    end
+
+    # Reads the work a handler left with a provider, as RubyLLM returned it.
+    # Each kind of RubyLLM's provider-side work tells how it is doing with
+    # predicates of its own, so the reading is kept here, one per kind, and
+    # the job that waits on the work reads only the RemoteState.
+    def remote_state(work)
+      case work
+      when RubyLLM::Batch
+        RemoteState.new(
+          kind: "batch", id: work.id, provider: work.provider, status: batch_status(work),
+          raw_status: work.raw_status, request_counts: work.request_counts
+        )
+      else
+        raise ArgumentError, "No reading of #{work.class} as work left with a provider"
+      end
     end
 
     private
+
+    # OpenAI's expired batch reads as failed: it ended without finishing.
+    def batch_status(batch)
+      return :pending unless batch.complete?
+      return :succeeded if batch.succeeded?
+      return :cancelled if batch.cancelled?
+
+      :failed
+    end
 
     # Only the names of the required settings are public in RubyLLM 2.0.0;
     # the provider's own configured? check is not. The names come from
