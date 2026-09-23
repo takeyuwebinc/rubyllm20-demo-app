@@ -138,24 +138,39 @@ module Observability
       attributes.merge!(usage_attributes(payload[:tokens], payload[:cost]))
       attributes.merge!(chat_attributes(payload)) if name == "chat.ruby_llm"
       attributes.merge!(speech_attributes(payload)) if name == "speech.ruby_llm"
+      attributes.merge!(video_job_attributes(payload)) if name == "video_job.ruby_llm"
       attributes
     end
 
     # The voice and format are the ones the provider used once it answered,
-    # and the ones asked for when it failed. The text read aloud goes where
-    # a prompt goes; the output is audio, which the message attributes have
-    # no place for.
+    # and the ones asked for when it failed.
     def speech_attributes(payload)
-      attributes = {
+      {
         "ruby_llm.speech.voice" => payload[:voice]&.to_s,
         "ruby_llm.speech.format" => payload[:format]&.to_s,
         "ruby_llm.speech.audio_bytes" => payload[:audio_bytes]&.to_i
-      }
-      if @capture_content
-        input = RubyLLM::Message.new(role: :user, content: payload[:input].to_s)
-        attributes["gen_ai.input.messages"] = MessageFormatter.format([ input ]).presence&.to_json
-      end
-      attributes
+      }.merge(generation_input_attributes(payload[:input]))
+    end
+
+    # The event covers only the submission. The provider renders the video
+    # afterwards, while the requests that poll it run outside this span, so
+    # the span has no output. The id is what the provider knows the work by,
+    # and is set only once the provider accepted it.
+    def video_job_attributes(payload)
+      {
+        "ruby_llm.video_job.id" => payload[:job_id]&.to_s,
+        "ruby_llm.video_job.options" => payload[:provider_options].presence&.to_json
+      }.merge(generation_input_attributes(payload[:prompt]))
+    end
+
+    # The text audio or video was generated from goes where a prompt goes.
+    # The output is audio or video, which the message attributes have no
+    # place for.
+    def generation_input_attributes(text)
+      return {} unless @capture_content
+
+      input = RubyLLM::Message.new(role: :user, content: text.to_s)
+      { "gen_ai.input.messages" => MessageFormatter.format([ input ]).presence&.to_json }
     end
 
     def chat_attributes(payload)
