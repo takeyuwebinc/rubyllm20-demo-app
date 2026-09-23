@@ -239,12 +239,60 @@
 - key: tokenization
   name: Tokenization and Token Counting
   summary: 送信前に入力のトークン数を数えたい、テキストがトークンにどう分割されるかを知りたい
+  useful_cases: |-
+    送信する前に、指示文、履歴、ツール、スキーマ、添付を含めた入力のトークン数を、プロバイダー自身の数え方で知りたい場合に役立つ。`chat.count_tokens(question)` は、組み立てた会話に質問を足した入力のトークン数を返す。質問は会話に加えないので、数えた後で同じ会話に `ask` できる。
+
+    数えるのは、プロバイダーの計数エンドポイントである。OpenAI では、Responses API の input_tokens に、通常の問い合わせと同じ形の入力を送る。応答は生成されない。そのため、ローカルのトークナイザーでは再現しにくい画像、ツール定義、モデルごとの整形も含めて数えられる。
+
+    上限は、会話がモデルの登録簿（`RubyLLM.models`）から解決したモデルの情報（`chat.model`）の `context_window` と比べる。このデモでは、入力トークン数がコンテキストウィンドウより小さければ「収まる」と判定し、残りを余地として示す。`max_output_tokens` は、余地のうち出力に使える分の目安として並べる。
+
+    計数は、出力の長さも、課金される使用量も示さない。送信後の使用量は、応答の `tokens` と `cost` で読む。プロバイダー側のツール、`provider_options`、compaction、`before_request` による変更は数えられないので、それらを使う会話では、実際に送る入力と数がずれることがある。計数は使用量を記録せず、chat の計装イベントも発行しない。このアプリの Sentry のトレースには計数のリクエストだけが載り、トークン数とコストは載らない。数えた結果は実行の画面で読む。
+
+    会話の計数（`count_tokens`）とテキストの分割（`RubyLLM.tokenize`）は、プロバイダーの別のエンドポイントを使う。会話を数えられるのは OpenAI、Anthropic、Gemini、Bedrock、Vertex AI（Gemini のモデルに限る。Vertex AI 上の Claude では数えられない）である。xAI、Cohere、GPUStack はテキストの分割にだけ対応する。公式の Provider API Coverage の表は 2 つを「Token counting」の 1 行にまとめているため、xAI でも会話を数えられるように見える。対応しないプロバイダーでは `RubyLLM::Error` になる。
+  without_it: |-
+    ローカルのトークナイザー（tiktoken など）で見積もると、指示文やメッセージの区切りの整形、ツール定義、画像、モデルごとの違いを自分で再現する必要があり、プロバイダーが数える値とずれる。
+
+    送ってみて、上限超過のエラー（`RubyLLM::ContextLengthExceededError`）で知る方法では、送ってからでないと分からない。上限に近い入力を、送る前に切り詰める判断ができない。
   sources:
-    - title: Tokenization（RubyLLM）
-      url: https://rubyllm.com/tokenization/
+    - title: Tokenization（RubyLLM）— Counting a Chat Request と Token Counts and Usage
+      url: https://rubyllm.com/tokenization/#counting-a-chat-request
+    - title: What's New in 2.0（RubyLLM）— Tokenization and Token Counting
+      url: https://rubyllm.com/whats-new-in-2-0/#tokenization-and-token-counting
+    - title: Counting tokens（OpenAI）
+      url: https://developers.openai.com/api/docs/guides/token-counting
+    - title: Get input token counts（OpenAI）
+      url: https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens/methods/count
   scenarios:
     - key: count_tokens
       name: 送信前に入力のトークン数を数える
+      handler: Tokenization::CountInputTokens
+      providers: [openai]
+      # A model sent through the Responses API, which has the counting
+      # endpoint, and whose context window the registry knows.
+      models:
+        model: gpt-5-nano
+      inputs:
+        - name: instructions
+          label: 指示文
+          required: true
+          default: |-
+            あなたは、家電と日用品を扱う架空の EC サイトのサポートデスクの担当者です。
+            次の返品ポリシーに沿って、顧客からの問い合わせに丁寧な日本語で簡潔に回答してください。
+
+            返品ポリシー:
+            - 商品の到着から 30 日以内なら返品できます。
+            - 未開封の商品は、理由を問わず返品できます。返送の送料は顧客の負担です。
+            - 開封済みの商品は、初期不良または配送中の破損の場合に限り返品できます。返送の送料は当社の負担です。
+            - 食品、消耗品（フィルター、電池など）、セール品は返品できません。
+            - 返金は、返品の到着を確認してから 7 営業日以内に、支払いに使った方法で行います。
+        - name: question
+          label: 顧客からの問い合わせ文
+          required: true
+          default: |-
+            3 週間前に届いた電気ケトル（注文番号 D-40518）を開封して使ってみましたが、思っていたより音が大きいので返品したいです。返品できますか。返送の送料はどちらの負担になりますか。
+      result_kind: token_count
+      # Counting changes nothing, so starting over only counts again.
+      retryable: true
     - key: tokenize_text
       name: テキストのトークンへの分割を見る
 

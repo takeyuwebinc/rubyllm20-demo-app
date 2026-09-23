@@ -107,6 +107,31 @@ module Demos
       refute_predicate Catalog.scenario("generate_product_video"), :implemented?
     end
 
+    test "counts tokens with OpenAI from instructions and a question, and starts over when its job runs again" do
+      scenario = Catalog.scenario("count_tokens")
+
+      assert_equal Tokenization::CountInputTokens, scenario.handler
+      assert_equal %w[openai], scenario.providers
+      assert_equal %w[instructions question], scenario.inputs.map(&:name)
+      assert scenario.inputs.all?(&:required)
+      assert scenario.inputs.all? { |input| input.default.present? }
+      assert_equal "token_count", scenario.result_kind
+      assert_equal true, scenario.retryable
+    end
+
+    # Without a known context window the scenario could not tell whether the
+    # input fits.
+    test "counts tokens with a model whose limits the registry knows" do
+      model = RubyLLM.models.find(Catalog.scenario("count_tokens").models.fetch("model"))
+
+      assert_equal 400_000, model.context_window
+      assert_equal 128_000, model.max_output_tokens
+    end
+
+    test "keeps the text tokenization scenario in preparation" do
+      assert_not Catalog.scenario("tokenize_text").implemented?
+    end
+
     # Availability is judged from the providers a scenario lists, while the
     # handler reaches the provider through the model id. They must agree.
     test "lists the provider each model of an implemented scenario resolves to" do

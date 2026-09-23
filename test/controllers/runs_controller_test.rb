@@ -341,6 +341,73 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
     assert_select "a[href=?] [data-run-status]", run_path(run), text: "承認待ち"
   end
 
+  test "shows the token count, the model's limits, what is left, and that it fits" do
+    run = create_token_count_run("input_tokens" => 1_234, "context_window" => 400_000, "max_output_tokens" => 128_000, "remaining" => 398_766, "fits" => true)
+
+    get run_path(run)
+
+    assert_select "[data-run-status]", text: "成功"
+    assert_select "[data-token-count] [data-verdict]", text: "収まる"
+    assert_equal [ "入力トークン数", "1,234" ], token_count_row("input-tokens")
+    assert_equal [ "コンテキストウィンドウ", "400,000" ], token_count_row("context-window")
+    assert_equal [ "余地", "398,766" ], token_count_row("remaining")
+    assert_equal [ "最大出力トークン数", "128,000" ], token_count_row("max-output-tokens")
+    assert_select "[data-token-count]", text: /数えたモデル: gpt-5-nano/
+    assert_select "[data-token-count] [data-limit-unknown]", count: 0
+  end
+
+  test "shows an input over the context window as not fitting, and by how much" do
+    run = create_token_count_run("input_tokens" => 401_234, "context_window" => 400_000, "max_output_tokens" => 128_000, "remaining" => -1_234, "fits" => false)
+
+    get run_path(run)
+
+    assert_select "[data-token-count] [data-verdict]", text: "収まらない"
+    assert_equal [ "入力トークン数", "401,234" ], token_count_row("input-tokens")
+    assert_equal [ "余地", "1,234 トークン超過" ], token_count_row("remaining")
+  end
+
+  test "shows an input as large as the context window as not fitting, with nothing left" do
+    run = create_token_count_run("input_tokens" => 400_000, "context_window" => 400_000, "max_output_tokens" => 128_000, "remaining" => 0, "fits" => false)
+
+    get run_path(run)
+
+    assert_select "[data-token-count] [data-verdict]", text: "収まらない"
+    assert_equal [ "余地", "0" ], token_count_row("remaining")
+  end
+
+  test "says the limit is unknown and gives no verdict when the model has no context window" do
+    run = create_token_count_run("input_tokens" => 1_234, "context_window" => nil, "max_output_tokens" => 128_000, "remaining" => nil, "fits" => nil)
+
+    get run_path(run)
+
+    assert_select "[data-token-count]" do
+      assert_select "[data-limit-unknown]"
+      assert_select "[data-verdict]", count: 0
+      assert_select "[data-context-window]", count: 0
+      assert_select "[data-remaining]", count: 0
+      assert_select "dt", text: "コンテキストウィンドウ", count: 0
+      assert_select "dt", text: "余地", count: 0
+    end
+    assert_equal [ "入力トークン数", "1,234" ], token_count_row("input-tokens")
+    assert_equal [ "最大出力トークン数", "128,000" ], token_count_row("max-output-tokens")
+    assert_select "[data-token-count]", text: /数えたモデル: gpt-5-nano/
+  end
+
+  test "leaves out the maximum output when the model has none" do
+    known = create_token_count_run("input_tokens" => 1_234, "context_window" => 400_000, "max_output_tokens" => nil, "remaining" => 398_766, "fits" => true)
+    unknown = create_token_count_run("input_tokens" => 1_234, "context_window" => nil, "max_output_tokens" => nil, "remaining" => nil, "fits" => nil)
+
+    get run_path(known)
+    assert_select "[data-token-count] [data-verdict]", text: "収まる"
+    assert_select "[data-token-count] [data-max-output-tokens]", count: 0
+    assert_select "[data-token-count] dt", text: "最大出力トークン数", count: 0
+
+    get run_path(unknown)
+    assert_select "[data-token-count] [data-limit-unknown]"
+    assert_select "[data-token-count] [data-max-output-tokens]", count: 0
+    assert_select "[data-token-count] dt", text: "最大出力トークン数", count: 0
+  end
+
   test "shows what failed, where, and the likely causes" do
     run = create_run.tap { |r| r.fail_with!(RubyLLM::RateLimitError.new("You exceeded your current quota")) }
 
@@ -545,6 +612,18 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
       "searches" => [],
       "citations" => []
     }.merge(result))
+    run
+  end
+
+  # The label and the value of one row of the token count.
+  def token_count_row(field)
+    value = css_select("[data-token-count] [data-#{field}]").sole
+    [ value.previous_element.text.strip, value.text.strip ]
+  end
+
+  def create_token_count_run(result)
+    run = create_run(scenario_key: "count_tokens", input: { "instructions" => "サポートの担当者です。", "question" => "返品できますか。" })
+    run.succeed!(result.merge("model" => "gpt-5-nano"))
     run
   end
 
