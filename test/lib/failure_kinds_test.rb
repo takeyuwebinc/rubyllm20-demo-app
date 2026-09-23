@@ -85,6 +85,30 @@ class FailureKindsTest < ActiveSupport::TestCase
     assert_nil FailureKinds.for(IOError.new("disk full"))
   end
 
+  test "names an error from its class name" do
+    assert_equal "接続の失敗", FailureKinds.for_class_name("Faraday::ConnectionFailed").name
+    assert_equal "レート制限", FailureKinds.for_class_name("RubyLLM::RateLimitError").name
+  end
+
+  # A provider error the table does not list, known by the class it inherits.
+  class SlowDownError < RubyLLM::RateLimitError; end
+
+  test "judges a class name in the same order and by the same inheritance as an error" do
+    [ *FailureKinds::TABLE.keys, SlowDownError ].each do |error_class|
+      assert_equal FailureKinds.for(error_class.allocate), FailureKinds.for_class_name(error_class.name), error_class.name
+    end
+  end
+
+  test "returns nil for a class name it does not know, without raising" do
+    assert_nil FailureKinds.for_class_name("JSON::ParserError")
+    assert_nil FailureKinds.for_class_name("RubyLLM::NoSuchError")
+    assert_nil FailureKinds.for_class_name("not a constant")
+    assert_nil FailureKinds.for_class_name("RubyLLM::VERSION")
+    assert_nil FailureKinds.for_class_name("RubyLLM::VERSION::Error")
+    assert_nil FailureKinds.for_class_name(nil)
+    assert_nil FailureKinds.for_class_name("")
+  end
+
   test "tells provider failures from bugs" do
     assert FailureKinds.provider_call?(RubyLLM::ToolCallParseError.new)
     assert FailureKinds.provider_call?(RubyLLM::Error.new("Video generation failed: expired"))

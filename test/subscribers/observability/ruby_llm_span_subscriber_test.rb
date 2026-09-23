@@ -145,6 +145,52 @@ module Observability
       ] } ], output
     end
 
+    test "follows each provider step that has a list of results with those results as its response" do
+      answer = RubyLLM::Message.new(
+        role: :assistant, content: "合計は 12,800 円です。", model: "gpt-5-nano",
+        server_tool_calls: [
+          RubyLLM::ServerToolCall.new(type: "code_interpreter_call", id: "ci_1", input: "print(1 + 1)",
+            result: [ { "type" => "logs", "logs" => "2\n" } ], raw: {}),
+          RubyLLM::ServerToolCall.new(type: "code_interpreter_call", id: "ci_2", input: "print(sum([3, 4]))",
+            result: [ { "type" => "logs", "logs" => "7\n" }, { "type" => "image", "url" => "https://example.com/plot.png" } ], raw: {})
+        ]
+      )
+
+      instrument("chat.ruby_llm", chat_payload) { |payload| complete(payload, response: answer) }
+
+      output = JSON.parse(span("chat gpt-5-nano").attributes["gen_ai.output.messages"])
+      assert_equal [
+        { "type" => "text", "content" => "合計は 12,800 円です。" },
+        { "type" => "tool_call", "id" => "ci_1", "name" => "code_interpreter_call", "arguments" => "print(1 + 1)" },
+        { "type" => "tool_call_response", "id" => "ci_1", "result" => [ { "type" => "logs", "logs" => "2\n" } ] },
+        { "type" => "tool_call", "id" => "ci_2", "name" => "code_interpreter_call", "arguments" => "print(sum([3, 4]))" },
+        { "type" => "tool_call_response", "id" => "ci_2", "result" => [ { "type" => "logs", "logs" => "7\n" }, { "type" => "image", "url" => "https://example.com/plot.png" } ] }
+      ], output.sole["parts"]
+    end
+
+    # A result that is not a list, such as encrypted content, is opaque and
+    # stays out; an empty list is still the step's result.
+    test "gives a provider step a response only when its result is a list, even an empty one" do
+      answer = RubyLLM::Message.new(
+        role: :assistant, content: "", model: "gpt-5-nano",
+        server_tool_calls: [
+          RubyLLM::ServerToolCall.new(type: "code_interpreter_call", id: "ci_1", input: "print(1)", result: nil, raw: {}),
+          RubyLLM::ServerToolCall.new(type: "compaction", id: "cmp_1", result: "gAAAAABencrypted", raw: {}),
+          { type: "code_interpreter_call", id: "ci_2", input: "x = 1", result: [] }
+        ]
+      )
+
+      instrument("chat.ruby_llm", chat_payload) { |payload| complete(payload, response: answer) }
+
+      output = JSON.parse(span("chat gpt-5-nano").attributes["gen_ai.output.messages"])
+      assert_equal [
+        { "type" => "tool_call", "id" => "ci_1", "name" => "code_interpreter_call", "arguments" => "print(1)" },
+        { "type" => "tool_call", "id" => "cmp_1", "name" => "compaction", "arguments" => {} },
+        { "type" => "tool_call", "id" => "ci_2", "name" => "code_interpreter_call", "arguments" => "x = 1" },
+        { "type" => "tool_call_response", "id" => "ci_2", "result" => [] }
+      ], output.sole["parts"]
+    end
+
     test "captures a response without provider steps as before, whether it has none or cannot have any" do
       [
         RubyLLM::Message.new(role: :assistant, content: "pong", model: "gpt-5-nano", server_tool_calls: []),

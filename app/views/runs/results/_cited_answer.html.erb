@@ -1,0 +1,53 @@
+<%# The quotes and the pages are what the provider took from the document. A source links to its page of the document
+    only while the scenario defines a document of the filename the source is titled with. %>
+<% result = run.result %>
+<% answer = result["answer"].to_s %>
+<% citations = result["citations"] || [] %>
+<% documents = run.scenario&.documents || [] %>
+<div data-cited-answer class="max-w-prose space-y-6">
+  <section>
+    <h2 class="text-base font-semibold text-gray-700">回答</h2>
+    <div data-answer class="mt-2 whitespace-pre-wrap break-words leading-relaxed text-gray-900"><%= answer_with_citation_marks(answer, citations) %></div>
+  </section>
+
+  <section>
+    <h2 class="text-base font-semibold text-gray-700">出典</h2>
+    <% if citations.any? %>
+      <ol class="mt-2 space-y-4 text-sm">
+        <% citations.each.with_index(1) do |citation, number| %>
+          <% title = citation["title"].presence || result["document"] %>
+          <% document = documents.find { |candidate| candidate.filename == title } %>
+          <% start_page, end_page = citation.values_at("start_page", "end_page") %>
+          <li id="<%= citation_anchor(number) %>" data-citation="<%= number %>" class="flex gap-3 break-words text-gray-900">
+            <span class="w-8 shrink-0 font-medium text-gray-500">[<%= number %>]</span>
+            <div class="min-w-0 space-y-1">
+              <% if start_page.is_a?(Integer) %>
+                <p data-pages class="font-medium"><%= end_page.is_a?(Integer) && end_page > start_page ? "#{start_page}〜#{end_page} ページ" : "#{start_page} ページ" %></p>
+              <% end %>
+              <% if citation["cited_text"].present? %>
+                <blockquote data-cited-text class="whitespace-pre-line border-l-2 border-gray-300 pl-3 text-gray-700"><%= citation["cited_text"] %></blockquote>
+              <% end %>
+              <% if title.present? %>
+                <p data-document>
+                  <% if document %>
+                    <%= link_to title, start_page.is_a?(Integer) ? "#{document.url}#page=#{start_page}" : document.url,
+                          target: "_blank", rel: "noopener", class: "link-quiet" %>
+                  <% else %>
+                    <span class="text-gray-500"><%= title %></span>
+                  <% end %>
+                </p>
+              <% end %>
+              <% if !citation_marked?(citation, answer) && citation["text"].present? %>
+                <p data-cited-span class="text-gray-700">回答の該当箇所: <%= citation["text"] %></p>
+              <% end %>
+            </div>
+          </li>
+        <% end %>
+      </ol>
+    <% else %>
+      <p class="mt-2 text-sm text-gray-500">出典なし</p>
+    <% end %>
+  </section>
+
+  <p class="text-sm text-gray-500">応答したモデル: <%= result["model"] %></p>
+</div>

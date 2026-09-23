@@ -30,16 +30,29 @@ module Demos
 
     # Answers each question, or each count, with the next scripted answer, in
     # place of a chat with a provider, and keeps the questions it was given.
+    # An answer can report a fallback attempt to the after_fallback callbacks
+    # with #fall_back.
     class ScriptedChat
       attr_reader :questions
 
       def initialize(*answers)
         @answers = answers
         @questions = []
+        @fallback_callbacks = []
       end
 
       def with_instructions(_instructions) = self
       def with_schema(_schema) = self
+      def with_fallbacks(*_models, **_options) = self
+
+      def after_fallback(&callback)
+        @fallback_callbacks << callback
+        self
+      end
+
+      def fall_back(fallback)
+        @fallback_callbacks.each { |callback| callback.call(fallback) }
+      end
 
       def ask(question)
         @questions << question
@@ -247,6 +260,55 @@ module Demos
       assert_equal [ "返品できますか。" ], chat.questions
     end
 
+    # The main model's requests never reach OpenAI, so the error recorded is
+    # the fallback model's, while the run names both providers. The switch
+    # itself is kept nowhere: only a result holds it.
+    test "fails a fallback run whose fallback model also failed, as that kind of failure, keeping no switch" do
+      run = Run.create!(scenario_key: "fall_back_to_another_provider", input: { "inquiry" => "配送予定日を教えてください。" })
+      overloaded = RubyLLM::OverloadedError.new("Overloaded")
+      switch = ChatHelpers::ScriptedFallback.new(
+        from: RubyLLM.models.find("gpt-5-nano"), to: RubyLLM.models.find("claude-haiku-4-5"),
+        error: Faraday::ConnectionFailed.new("Failed to open TCP connection to api.openai.invalid:443"), attempt: 1,
+        response: nil, fallback_error: overloaded
+      )
+      chat = ScriptedChat.new(lambda do
+        chat.fall_back(switch)
+        raise overloaded
+      end)
+
+      with_context(chat) do
+        assert_no_error_reported { RunJob.perform_now(run) }
+      end
+
+      assert_predicate run.reload, :failed?
+      assert_nil run.result
+      assert_equal({
+        "provider" => "OpenAI、Anthropic",
+        "kind" => "過負荷",
+        "error_class" => "RubyLLM::OverloadedError",
+        "message" => "Overloaded",
+        "hint" => FailureKinds::PROVIDER_OUTAGE
+      }, run.failure)
+      assert_equal [ "配送予定日を教えてください。" ], chat.questions
+    end
+
+    # With a fake key, a request that reached Anthropic would fail as a
+    # provider error and go unreported: the missing file is found first.
+    test "fails and reports a run whose document is missing, before calling the provider" do
+      run = Run.create!(scenario_key: "cite_return_policy", input: { "inquiry" => "返品できますか。" })
+      missing = Catalog.scenario("cite_return_policy").with(documents: [
+        Scenario::Document.new(name: "policy", label: "返品ポリシー", path: "documents/missing-policy.pdf")
+      ])
+      run.define_singleton_method(:scenario) { missing }
+
+      assert_error_reported(Errno::ENOENT) { RunJob.perform_now(run) }
+
+      assert_predicate run.reload, :failed?
+      assert_nil run.result
+      assert_equal "Errno::ENOENT", run.failure["kind"]
+      assert_match "missing-policy.pdf", run.failure["message"]
+    end
+
     test "does nothing for a finished run" do
       @run.succeed!({ "answer" => "done" })
 
@@ -387,6 +449,7 @@ module Demos
         providers: %w[openai],
         models: { "model" => "gpt-5-nano" },
         inputs: [ Scenario::Input.new(name: "inquiry", label: "問い合わせ", default: "", required: true) ],
+        documents: [],
         handler_name: FakeHandler.name,
         result_kind: "text_answer",
         retryable: retryable

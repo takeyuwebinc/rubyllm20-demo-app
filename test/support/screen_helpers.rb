@@ -17,6 +17,14 @@ module ScreenHelpers
     RubyLLM.config.xai_api_key = original
   end
 
+  def with_anthropic_key(value)
+    original = RubyLLM.config.anthropic_api_key
+    RubyLLM.config.anthropic_api_key = value
+    yield
+  ensure
+    RubyLLM.config.anthropic_api_key = original
+  end
+
   def with_env(values)
     originals = values.keys.to_h { |key| [ key, ENV[key] ] }
     values.each { |key, value| ENV[key] = value }
@@ -24,6 +32,42 @@ module ScreenHelpers
   ensure
     originals.each { |key, value| ENV[key] = value }
   end
+
+  # Puts the given demos in place of the catalog for the length of a block.
+  def with_demos(demos)
+    original = Demos::Catalog.method(:demos)
+    Demos::Catalog.define_singleton_method(:demos) { demos }
+    yield
+  ensure
+    Demos::Catalog.define_singleton_method(:demos, original)
+  end
+
+  # A catalog of one runnable demo whose scenario, answer_from_documents,
+  # hands its handler the given documents.
+  def demos_with_documents(documents)
+    Demos::Catalog.build([ {
+      "key" => "documents-demo",
+      "name" => "文書を添付するデモ",
+      "summary" => "文書に基づいて回答したい",
+      "sources" => [ { "title" => "Citations（RubyLLM）", "url" => "https://rubyllm.com/citations/" } ],
+      "scenarios" => [ {
+        "key" => "answer_from_documents",
+        "name" => "文書に基づいて回答する",
+        "handler" => "ResponsesApi::AnswerInquiry",
+        "providers" => [ "openai" ],
+        "models" => { "model" => "gpt-5-nano" },
+        "inputs" => [ { "name" => "inquiry", "label" => "問い合わせ文", "required" => true, "default" => "返品できますか" } ],
+        "documents" => documents,
+        "result_kind" => "text_answer",
+        "retryable" => true
+      } ]
+    } ])
+  end
+
+  TWO_DOCUMENTS = [
+    { "name" => "policy", "label" => "返品ポリシー文書（PDF、3 ページ）", "path" => "documents/return-policy.pdf" },
+    { "name" => "terms", "label" => "利用規約", "path" => "documents/利用 規約.pdf" }
+  ].freeze
 
   def create_run(scenario_key: "answer_inquiry", input: { "inquiry" => "Where is my order?" }, **attributes)
     Demos::Run.create!(scenario_key: scenario_key, input: input, **attributes)

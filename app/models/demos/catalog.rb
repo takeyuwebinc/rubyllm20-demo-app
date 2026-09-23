@@ -7,7 +7,12 @@ module Demos
 
     class << self
       def demos
-        @demos ||= YAML.load_file(PATH).map { |attributes| build_demo(attributes) }.freeze
+        @demos ||= build(YAML.load_file(PATH))
+      end
+
+      # The demos from their attributes, as config/demos.yml holds them.
+      def build(attributes)
+        attributes.map { |demo| build_demo(demo) }.freeze
       end
 
       def demo(key)
@@ -45,10 +50,11 @@ module Demos
           providers: attributes.fetch("providers", []),
           models: attributes.fetch("models", {}),
           inputs: attributes.fetch("inputs", []).map { |input| build_input(input) },
+          documents: attributes.fetch("documents", []).map { |document| build_document(document) },
           handler_name: attributes["handler"],
           result_kind: attributes["result_kind"],
           retryable: attributes["retryable"]
-        )
+        ).tap { |scenario| refuse_shared_names(scenario) }
       end
 
       def build_input(attributes)
@@ -58,6 +64,26 @@ module Demos
           default: attributes.fetch("default", ""),
           required: attributes.fetch("required", false)
         )
+      end
+
+      def build_document(attributes)
+        Scenario::Document.new(
+          name: attributes.fetch("name"),
+          label: attributes.fetch("label"),
+          path: attributes.fetch("path")
+        )
+      end
+
+      # The handler takes the inputs, the models, and the documents as the
+      # keywords of one call, where a later value of a name wins. A shared
+      # name would let what a person typed stand in for a model or for the
+      # path of a file to send.
+      def refuse_shared_names(scenario)
+        names = scenario.inputs.map(&:name) + scenario.models.keys + scenario.documents.map(&:name)
+        shared = names.tally.select { |_, count| count > 1 }.keys
+        return if shared.empty?
+
+        raise ArgumentError, "Scenario #{scenario.key} gives more than one of its inputs, models, and documents the name #{shared.join(", ")}"
       end
     end
   end

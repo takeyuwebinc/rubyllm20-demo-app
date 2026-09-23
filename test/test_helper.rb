@@ -9,6 +9,7 @@ require_relative "support/document_order_assertions"
 # the developer's .env, which dotenv-rails loads in tests too, and fail any
 # call that slips through.
 RubyLLM.config.openai_api_key = "sk-test"
+RubyLLM.config.anthropic_api_key = "sk-ant-test"
 RubyLLM.config.xai_api_key = "xai-test"
 
 # RubyLLM reads its model registry once per process, from the
