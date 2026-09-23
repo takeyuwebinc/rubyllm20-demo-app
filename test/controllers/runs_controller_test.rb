@@ -469,6 +469,15 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
     assert_equal [ "   " ], token_strings
   end
 
+  test "explains the dashed frame when a single token of the text is a fragment" do
+    run = create_tokenization_run([ [ 1, "よろしく", [ 227, 130, 136, 227, 130, 141, 227, 129, 151, 227, 129, 143 ] ], [ 2, "", [ 240, 159, 153, 143 ] ] ])
+
+    get run_path(run)
+
+    assert_select "[data-tokenization] [data-token-fragment]", count: 1
+    assert_select "[data-tokenization] [data-fragment-legend]", count: 1
+  end
+
   test "shows every token of a long text, with the count in groups of three digits" do
     run = create_tokenization_run(Array.new(20_000) { |index| [ index, "語#{index}", "語#{index}".bytes ] })
 
