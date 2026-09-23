@@ -11,6 +11,11 @@ module ModelFallbacks
     # exist, so every request fails to connect without reaching OpenAI or
     # costing anything. A connection failure is one of the errors that
     # trigger a fallback by default, after RubyLLM's own retries run out.
+    # A very short timeout could reach OpenAI and be billed, and an error
+    # raised before sending leaves no failed attempt in the trace.
+    # This holds only while the resolver answers so and no HTTP proxy is set
+    # (Faraday uses HTTPS_PROXY): otherwise another error, such as
+    # Faraday::SSLError, triggers no fallback and is reported as a bug.
     UNREACHABLE_OPENAI_API_BASE = "https://api.openai.invalid/v1".freeze
 
     INSTRUCTIONS = <<~TEXT
@@ -29,6 +34,8 @@ module ModelFallbacks
       outage = RubyLLM.context { |config| config.openai_api_base = UNREACHABLE_OPENAI_API_BASE }
       fallbacks = []
 
+      # Retries keep their default (3), so the trace shows the order a real
+      # outage takes: four attempts at the main model, then the fallback.
       chat = outage.chat(model: @model)
         .with_instructions(INSTRUCTIONS)
         .with_fallbacks(@fallback_model)
@@ -46,6 +53,8 @@ module ModelFallbacks
 
     private
 
+    # Read in after_fallback, the one callback that knows whether the
+    # fallback model answered: before_fallback runs before it is asked.
     # from and to are the models the chat switched between. The fallback's
     # own provider is nil for a fallback given as a model id.
     def fallback_record(fallback)
