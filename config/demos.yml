@@ -190,18 +190,34 @@
     行われた検索は、応答の `server_tool_calls` で読める。OpenAI では 1 件ごとに、検索した語句や開いたページの URL を持つ。出典は `citations` で読める。URL、題名、回答の該当する範囲を持ち、文書の引用と同じ `Citation` のオブジェクトである。OpenAI の注釈が指す「回答の該当する範囲」は、主張の文ではなく、モデルが回答の中に書いた出典のリンクの部分である。Rails では、メッセージの記録の `server_tool_calls` と `citations` の列に残る。
 
     課金は、検索の回数（OpenAI では 1,000 回あたり 10 ドル）と、検索結果のトークン（モデルの入力の単価）である。RubyLLM が求めるコストはトークンの単価だけによるもので、検索の回数の課金を含まない。そのため、Sentry に載るコストは実際より小さい。このアプリで確かめた既定の質問の応答では、検索 6 回の課金 0.06 ドルに対し、RubyLLM が求めたコストは約 0.006 ドルだった。検索の回数は、応答の本体の `tool_usage`（文書には載っていない）の `num_requests` に載る。その応答では、`server_tool_calls` のうち操作の種類が `search` のものの件数と一致し、ページを開く操作（`open_page`）は数えられていなかった。また OpenAI は、`gpt-5` で推論の強さを `minimal` にすると Web 検索を使えないとしている。
+
+    コードを実行する隔離環境を自前で構築、運用したくない場合にも役立つ。`with_provider_tools(:code_execution)` は、OpenAI では `code_interpreter`（コンテナは `auto`）になる。モデルが Python のコードを書いてプロバイダーのコンテナで実行し、その出力を読んで回答する。アプリは問い合わせを 1 回送るだけで、コードを実行する場所もツールも持たない。
+
+    実行されたコードは、`server_tool_calls` の `input` で読める。コードの出力は、RubyLLM の既定の要求では返らない。`with_provider_options` で `include` に `code_interpreter_call.outputs` を足すと、`result` に入る。`with_provider_options` の値は RubyLLM の既定値を置き換えるので、既定の `reasoning.encrypted_content` も並べて書く。実行の状態（`status`）とコンテナの ID（`container_id`）は RubyLLM が正規化しないので、`raw` で読む。コードが作ったファイルは `citations` の注釈になるだけで、OpenAI では `attachments` に入らない。
+
+    プロバイダー側のツールだけを使う会話では、`with_tool_options` はツールの使用を強制しない（RubyLLM 2.0.0 のソースで確かめた。公式のガイドには書かれていない）。強制するには、`tool_choice` を `with_provider_options` でプロバイダーの語彙のまま渡す。このアプリで確かめたところ、指示文で頼むだけでは、2 回のうち 1 回はコードを実行せずに回答した。
+
+    コード実行の課金は、コンテナとトークンである。コンテナは定価で、1 GB のコンテナの 20 分のセッションあたり 0.03 ドルである（料金の文書は、対象のセッションを分単位で最低 5 分として課金するとも書く）。RubyLLM が求めるコストはトークンの単価だけによるもので、コンテナの課金を含まない。そのため、Sentry に載るコストは実際より小さい。このアプリで確かめた既定の入力の応答（3 回）では、RubyLLM が求めたコストは約 0.0009〜0.0012 ドルで、コンテナの定価 0.03 ドルの 30 分の 1 前後だった。コンテナの回数は応答の本体に載らない。各ステップの `container_id` で、使われたコンテナを区別できる。
   without_it: |-
     検索エンジンの API を選んで契約し、自前のツールとして関数を書くことになる。検索結果の取得、ページの本文の取り出し、要約、回答の文と出典の対応づけを、自分で実装して保守する。
 
     モデルは検索の語句を決めるだけで、検索と閲覧の往復のたびに、ツールの呼び出しと結果の受け渡しが要る。往復の回数だけ、問い合わせが増える。
+
+    コードを実行させるには、モデルが書いたコードを安全に実行する隔離環境（コンテナやサンドボックス）を用意し、実行時間、メモリ、ネットワークの制限と、環境の破棄を自分で運用することになる。コードを受け取って実行し、出力をモデルに返す往復も、自前のツールとして書く。
   sources:
     - title: Provider Tools（RubyLLM）— Enabling Provider Tools、Tool Options、Reading Results
       url: https://rubyllm.com/provider-tools/
     - title: What's New in 2.0（RubyLLM）— Provider Tools
       url: https://rubyllm.com/whats-new-in-2-0/#provider-tools
+    - title: Advanced Request Control（RubyLLM）— Provider Options（with_provider_options が RubyLLM の既定値を上書きすること）
+      url: https://rubyllm.com/chat-request-control/#provider-options
     - title: Web search（OpenAI）— 出力の項目と注釈、対応するモデルと推論の強さ
       url: https://developers.openai.com/api/docs/guides/tools-web-search
-    - title: Pricing（OpenAI）— Built-in tools（Web 検索の課金）
+    - title: Code Interpreter（OpenAI）— コンテナの auto と再利用、既定の 1 GB、失効、ファイルの引用、tool_choice を required にする例
+      url: https://developers.openai.com/api/docs/guides/tools-code-interpreter
+    - title: Create a model response（OpenAI）— include の値、tool_choice、出力の項目 code_interpreter_call
+      url: https://developers.openai.com/api/reference/resources/responses/methods/create
+    - title: Pricing（OpenAI）— Built-in tools（Web 検索とコンテナの課金）
       url: https://developers.openai.com/api/docs/pricing#built-in-tools
   scenarios:
     - key: search_web
@@ -224,6 +240,39 @@
       retryable: true
     - key: run_code
       name: 注文データを集計するコードを実行する
+      handler: ProviderTools::AnswerWithCodeExecution
+      providers: [openai]
+      # A model that can run code. RubyLLM sends it through the Responses
+      # API, where :code_execution becomes OpenAI's code_interpreter tool in a
+      # container that OpenAI creates, or reuses while it is still active.
+      models:
+        model: gpt-5-nano
+      inputs:
+        - name: orders
+          label: 注文データ（CSV）
+          required: true
+          default: |-
+            注文番号,注文日,カテゴリ,商品,金額,状態
+            E-50101,2026-09-01,キッチン家電,電気ケトル,4980,支払い済み
+            E-50102,2026-09-02,生活家電,コードレス掃除機,19800,支払い済み
+            E-50103,2026-09-03,日用品,食器用洗剤（詰め替え）,398,支払い済み
+            E-50104,2026-09-05,キッチン家電,コーヒーメーカー,7980,返金済み
+            E-50105,2026-09-08,日用品,キッチンペーパー（6 ロール）,598,支払い済み
+            E-50106,2026-09-10,生活家電,加湿器,8980,支払い済み
+            E-50107,2026-09-12,キッチン家電,トースター,6480,支払い済み
+            E-50108,2026-09-15,生活家電,電気毛布,3980,返金済み
+        - name: request
+          label: 集計の依頼
+          required: true
+          default: |-
+            この注文データから、次の 3 つを求めてください。
+            - カテゴリごとの売上金額の合計（返金済みの注文を除く）
+            - 返金済みの注文の件数と金額の合計
+            - 全体の平均注文金額（返金済みの注文を除く）
+      result_kind: code_execution_answer
+      # Starting over runs the code again, in a container created again, and
+      # is billed again, but leaves nothing half done.
+      retryable: true
 
 - key: deep-research
   name: Deep Research

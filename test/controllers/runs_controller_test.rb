@@ -286,6 +286,138 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
     assert_select "[data-search] code", text: "web_search_call"
   end
 
+  test "shows the code execution answer with each step's number, status, code, and printed output, the container, and the model" do
+    run = create_code_execution_run([
+      code_step("import pandas as pd\nprint(totals)", outputs: [ { "type" => "logs", "logs" => "キッチン家電    11460\n生活家電      28780\n" } ]),
+      code_step("print(refunds)", outputs: [ { "type" => "logs", "logs" => "2 11960\n" } ])
+    ])
+
+    get run_path(run)
+
+    assert_select "[data-code-execution-answer]" do
+      assert_select "h2" do |headings|
+        assert_equal %w[回答 実行されたコード], headings.map { |heading| heading.text.strip }
+      end
+      assert_select "*", text: "カテゴリごとの売上は、キッチン家電が 11,460 円です。"
+      assert_select "[data-step]", 2
+      assert_select "[data-step-number]" do |numbers|
+        assert_equal [ "ステップ 1", "ステップ 2" ], numbers.map { |number| number.text.strip }
+      end
+      assert_select "[data-step-status]", { text: "completed", count: 2 }
+      # Compared on the pre, since assert_select squeezes the whitespace of
+      # any other element's text.
+      assert_select "[data-step] pre:not([data-output])", text: "import pandas as pd\nprint(totals)" do
+        assert_select "code", 1
+      end
+      assert_select "[data-step] pre code", text: "print(refunds)"
+      assert_select "[data-output='logs']", text: "キッチン家電    11460\n生活家電      28780\n"
+      assert_select "[data-output='logs']", text: "2 11960\n"
+      assert_select "[data-container]", { text: "cntr_1", count: 1 }
+      assert_select "*", text: /gpt-5-nano-2025-08-07/
+      assert_select "*", text: "コードの実行なし", count: 0
+      assert_select "*", text: "出力なし", count: 0
+    end
+  end
+
+  test "shows code and outputs the container returned as text, and neither links nor shows the URL of an image output" do
+    run = create_code_execution_run([
+      code_step("print('<script>alert(1)</script>')", status: "<b>completed</b>", outputs: [
+        { "type" => "logs", "logs" => "<img src=x onerror=alert(2)>\n" },
+        { "type" => "image", "url" => "javascript:alert(3)" }
+      ])
+    ])
+
+    get run_path(run)
+
+    assert_select "[data-code-execution-answer]" do
+      assert_select "script", count: 0
+      assert_select "img", count: 0
+      assert_select "b", count: 0
+      assert_select "[data-step] pre code", text: "print('<script>alert(1)</script>')"
+      assert_select "[data-output='logs']", text: "<img src=x onerror=alert(2)>\n"
+      assert_select "[data-step-status]", text: "<b>completed</b>"
+      assert_select "[data-output='image']", text: "画像の出力（このアプリでは取得しない）"
+    end
+    assert_select "a[href^='javascript']", count: 0
+    assert_no_match(/alert\(3\)/, response.body)
+  end
+
+  test "says when the model ran no code, shows no container, and still shows the answer" do
+    run = create_code_execution_run([])
+
+    get run_path(run)
+
+    assert_select "[data-code-execution-answer]" do
+      assert_select "*", text: "カテゴリごとの売上は、キッチン家電が 11,460 円です。"
+      assert_select "*", text: "コードの実行なし"
+      assert_select "[data-step]", count: 0
+      assert_select "[data-container]", count: 0
+      assert_select "*", text: /コンテナ/, count: 0
+    end
+  end
+
+  test "says when a step printed nothing, and names image and unknown outputs without their content" do
+    run = create_code_execution_run([
+      code_step("x = 1", outputs: []),
+      code_step("plot()", outputs: [ { "type" => "image", "url" => "https://example.com/plot.png" }, { "type" => "files", "files" => [ { "name" => "a.csv" } ] } ])
+    ])
+
+    get run_path(run)
+
+    assert_select "[data-step]" do |steps|
+      assert_select steps.first, "*", text: "出力なし"
+      assert_select steps.first, "[data-output]", count: 0
+      assert_select steps.last, "[data-output='image']", text: "画像の出力（このアプリでは取得しない）"
+      assert_select steps.last, "[data-output='other']", text: "その他の出力（files）"
+      assert_select steps.last, "*", text: "出力なし", count: 0
+    end
+    assert_select "a[href='https://example.com/plot.png']", count: 0
+    assert_no_match %r{example\.com/plot\.png}, response.body
+    assert_no_match(/a\.csv/, response.body)
+  end
+
+  test "shows a step without code by its item type alone" do
+    run = create_code_execution_run([ code_step(nil, outputs: [ { "type" => "logs", "logs" => "hidden\n" } ]) ])
+
+    get run_path(run)
+
+    assert_select "[data-step]" do
+      assert_select "[data-step-type]", text: "code_interpreter_call"
+      assert_select "pre", count: 0
+      assert_select "[data-output]", count: 0
+      assert_select "*", text: "出力なし", count: 0
+    end
+  end
+
+  test "shows a step's status only when it has one, and as the provider returned it" do
+    run = create_code_execution_run([ code_step("x = 1", status: nil), code_step("y = 2", status: "failed") ])
+
+    get run_path(run)
+
+    assert_select "[data-step]" do |steps|
+      assert_select steps.first, "[data-step-status]", count: 0
+      assert_select steps.last, "[data-step-status]", text: "failed"
+    end
+  end
+
+  test "shows each container once, and none when no step names one" do
+    run = create_code_execution_run([ code_step("a = 1", container_id: "cntr_1"), code_step("b = 2", container_id: "cntr_1"), code_step("c = 3", container_id: "cntr_2"), code_step("d = 4", container_id: nil) ])
+
+    get run_path(run)
+
+    assert_select "[data-container]" do |containers|
+      assert_equal %w[cntr_1 cntr_2], containers.map { |container| container.text.strip }
+    end
+
+    run = create_code_execution_run([ code_step("a = 1", container_id: nil), code_step("b = 2", container_id: nil) ])
+
+    get run_path(run)
+
+    assert_select "[data-step]", 2
+    assert_select "[data-container]", count: 0
+    assert_select "[data-code-execution-answer] *", text: /コンテナ/, count: 0
+  end
+
   test "plays the generated speech, offers it to save, and says it is AI-generated" do
     run = create_speech_run
 
@@ -613,6 +745,16 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
       "citations" => []
     }.merge(result))
     run
+  end
+
+  def create_code_execution_run(steps)
+    run = create_run(scenario_key: "run_code", input: { "orders" => "注文番号,金額\nE-1,4980", "request" => "合計を求めてください" })
+    run.succeed!({ "answer" => "カテゴリごとの売上は、キッチン家電が 11,460 円です。", "model" => "gpt-5-nano-2025-08-07", "steps" => steps })
+    run
+  end
+
+  def code_step(code, status: "completed", container_id: "cntr_1", outputs: [])
+    { "type" => "code_interpreter_call", "status" => status, "container_id" => container_id, "code" => code, "outputs" => outputs }
   end
 
   # The label and the value of one row of the token count.
