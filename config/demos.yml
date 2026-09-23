@@ -128,14 +128,54 @@
 - key: video-and-speech
   name: Video and Speech Generation
   summary: 回答文を読み上げる音声や、商品の説明文からの短い紹介動画を用意したい
+  useful_cases: |-
+    サポートの回答文や、自動音声応答の文面を読み上げたい場合に役立つ。`RubyLLM.speak` は、音声のバイト列を持つ `RubyLLM::Speech` を返す。`save` でファイルに書け、`to_blob` でバイト列を取り出して Rails の添付（Active Storage）にできる。このデモも、`to_blob` で実行に添付し、履歴から再生している。
+
+    声にはプロバイダーの既定があり、`voice:` で選べる。形式は `mp3` が既定で、`format:` で選べる。OpenAI では、`provider_options:` の `instructions` で話し方を指示できる（`tts-1` と `tts-1-hd` では使えない）。ブロックを渡すと、音声を届いた順に受け取れるので、生成が終わる前に再生を始められる。
+
+    計装イベント `speech.ruby_llm` で、生成にかかった時間が分かる。OpenAI の音声は使用量（トークン）を返さず、RubyLLM のモデルの登録簿にも単価がない。そのため RubyLLM のコストは不明になり、このアプリも Sentry にコストを送らない。
+
+    OpenAI の API リファレンスでは、入力は 4,096 文字までとされている。ただし `gpt-4o-mini-tts` には、文書に載っていない 2,000 トークンの入力の上限があり、日本語では約 3,000 文字でこちらが先に効く（2026-09-22 に実際の API で確かめた。何文字で超えるかは文によって変わる）。超えると OpenAI が 400 で拒み、RubyLLM は `RubyLLM::BadRequestError` を投げる。日本語にも対応しているが、声は英語に最適化されている。
+
+    OpenAI の利用規約は、AI が生成した音声であることを聞き手に明示するよう求めている。
+
+    動画の生成（`RubyLLM.animate`）の説明は、商品の紹介動画の代表シナリオとあわせて用意する。
+  without_it: |-
+    プロバイダーの音声の API を直接呼ぶと、エンドポイント、パラメーターの名前（声、形式）、バイナリの応答の受け取り、ストリーミング、エラーの変換を、自分で書いて保守することになる。
+
+    プロバイダーを替える（ElevenLabs、Gemini、Deepgram など）と、要求と応答の形が変わり、書き直しになる。たとえば ElevenLabs は声を名前ではなく ID で指定し、Gemini は生の PCM を返す。RubyLLM では、`model:` を替えるだけで同じ `RubyLLM::Speech` が返り、形式は `speech.format` と `speech.mime_type` で分かる。
   sources:
-    - title: Text to Speech（RubyLLM）
+    - title: Text to Speech（RubyLLM）— Basic Speech Generation、Voices、Formats、Style
       url: https://rubyllm.com/text-to-speech/
+    - title: What's New in 2.0（RubyLLM）— Video and Speech Generation
+      url: https://rubyllm.com/whats-new-in-2-0/#video-and-speech-generation
     - title: Video Generation（RubyLLM）
       url: https://rubyllm.com/video-generation/
+    - title: Text to speech（OpenAI）— 声、言語、形式、話し方の指示、AI が生成した音声であることの明示
+      url: https://developers.openai.com/api/docs/guides/text-to-speech
+    - title: Create speech（OpenAI）— 入力の上限とパラメーター
+      url: https://developers.openai.com/api/reference/resources/audio/subresources/speech/methods/create
   scenarios:
     - key: speak_answer
       name: 回答文を読み上げる
+      handler: VideoAndSpeech::SpeakAnswer
+      providers: [openai]
+      # A model that takes instructions on how to speak; tts-1 and tts-1-hd
+      # do not.
+      models:
+        model: gpt-4o-mini-tts
+      # Only the answer is an input. The voice and the manner of speaking
+      # are fixed in the handler, where the code shows how to choose them;
+      # a voice given as an input would need checking against the voices
+      # the model has.
+      inputs:
+        - name: text
+          label: 読み上げる回答文
+          required: true
+          default: |-
+            お問い合わせいただき、ありがとうございます。ご注文のワイヤレスイヤホン（注文番号 A-10234）は、配送センターの混雑により、お届けが 2 日ほど遅れております。ご不便をおかけして、申し訳ございません。本日中に、発送のお知らせをメールでお送りします。メールに記載の追跡番号から、配送状況をご確認いただけます。お届けの予定日を過ぎても届かない場合は、このメールにご返信ください。
+      result_kind: speech
+      retryable: true
     - key: generate_product_video
       name: 商品の紹介動画を生成する
 

@@ -1,0 +1,30 @@
+<%# The audio is the run's attachment that the result's reference names; the rest comes from the result. %>
+<% result = run.result %>
+<% reference = result["speech"] || {} %>
+<% file = run.generated_files.find { |attachment| attachment.filename.to_s == reference["filename"] } %>
+<section data-speech class="max-w-prose space-y-4">
+  <% if file %>
+    <audio controls preload="metadata" src="<%= rails_blob_path(file, only_path: true) %>" class="w-full"></audio>
+  <% else %>
+    <p data-speech-missing class="text-sm text-gray-500">音声が見つからない</p>
+  <% end %>
+
+  <p class="text-sm text-gray-600">この音声は AI が生成したものである。</p>
+
+  <% if file %>
+    <%= link_to "音声を保存する", rails_blob_path(file, disposition: "attachment", only_path: true), class: "btn-secondary" %>
+  <% end %>
+
+  <dl class="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-sm">
+    <dt class="text-gray-500">モデル</dt>
+    <dd class="text-gray-800"><%= result["model"] %></dd>
+    <dt class="text-gray-500">声</dt>
+    <dd class="text-gray-800"><%= result["voice"] %></dd>
+    <dt class="text-gray-500">形式</dt>
+    <dd class="text-gray-800"><%= result["format"] %></dd>
+    <dt class="text-gray-500">回答文の長さ</dt>
+    <dd class="text-gray-800"><%= number_with_delimiter(result["characters"]) %> 文字</dd>
+    <dt class="text-gray-500">音声の大きさ</dt>
+    <dd class="text-gray-800"><%= number_to_human_size(reference["byte_size"]) %></dd>
+  </dl>
+</section>

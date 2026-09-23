@@ -94,8 +94,51 @@ module Demos
       errors[self.class.input_error_key(name)]
     end
 
+    # Records the result. A value of the result that is a generated file
+    # (anything with to_blob and mime_type, such as RubyLLM's Speech, Video,
+    # and Image) is kept as an attachment named after its key, and the
+    # result keeps a reference to it in its place: the filename, the content
+    # type, and the byte size. The result stays plain JSON, and the history
+    # plays the file back from the attachment. The bytes themselves are not
+    # put in the result: the JSON column would grow by the size of every
+    # file, and playing one back would need a route of its own.
+    #
+    # The reference names the file rather than the attachment's id, so a
+    # view finds the file from the result's key alone. A key names one file
+    # per run.
+    #
+    # The files are uploaded inside the transaction that records the result,
+    # so a failure part way leaves no attachment, no result, and the status
+    # as it was. A file already written to the storage may remain there.
+    #
+    # A Video or an Image that holds only a URL downloads itself from the
+    # provider in to_blob, inside that transaction.
+    # TODO(when the product video scenario is implemented): decide whether
+    # its handler fetches the video first, keeping the download out of the
+    # transaction.
     def succeed!(result)
-      update!(status: :succeeded, result: result, finished_at: Time.current)
+      refuse_transition!("succeeded")
+
+      transaction do
+        blobs = []
+        kept = result.to_h do |key, value|
+          next [ key, value ] unless generated_file?(value)
+
+          blob = upload_generated_file(key.to_s, value)
+          blobs << blob
+          [ key, { "filename" => blob.filename.to_s, "content_type" => blob.content_type, "byte_size" => blob.byte_size } ]
+        end
+
+        assign_attributes(status: :succeeded, result: kept, finished_at: Time.current)
+        generated_files.attach(blobs) if blobs.any?
+        save!
+      end
+    rescue StandardError
+      # The rollback undoes what was written, but this object would still
+      # hold the result and the pending attachments, and the next save, such
+      # as the one that records the failure, would write them.
+      reload
+      raise
     end
 
     def fail_with!(error)
@@ -167,7 +210,42 @@ module Demos
 
     def status_transition
       from, to = status_change_to_be_saved
-      errors.add(:status, :invalid_transition, message: "は #{from} から #{to} に変えられない") unless self.class.transition?(from, to)
+      add_transition_error(from, to) unless self.class.transition?(from, to)
+    end
+
+    # The validation runs only on save, after anything the change stores
+    # beside the run has been written, and only when the status changes, so
+    # it lets a succeeded run succeed again. This refuses both up front,
+    # with the error the validation would raise.
+    def refuse_transition!(to)
+      return if self.class.transition?(status, to)
+
+      add_transition_error(status, to)
+      raise ActiveRecord::RecordInvalid, self
+    end
+
+    def add_transition_error(from, to)
+      errors.add(:status, :invalid_transition, message: "は #{from} から #{to} に変えられない")
+    end
+
+    def generated_file?(value)
+      value.respond_to?(:to_blob) && value.respond_to?(:mime_type)
+    end
+
+    # The generator's content type is kept as given rather than guessed
+    # from the bytes.
+    def upload_generated_file(key, file)
+      ActiveStorage::Blob.create_and_upload!(
+        io: StringIO.new(file.to_blob), filename: generated_filename(key, file), content_type: file.mime_type, identify: false
+      )
+    end
+
+    # RubyLLM's Speech names its format; Video and Image have only a MIME
+    # type. A MIME type Rails does not know leaves the name without an
+    # extension.
+    def generated_filename(key, file)
+      extension = file.respond_to?(:format) ? file.format : (Mime::Type.lookup(file.mime_type).symbol if file.mime_type.present?)
+      [ key, extension.presence ].compact.join(".")
     end
   end
 end

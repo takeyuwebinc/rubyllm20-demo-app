@@ -327,15 +327,73 @@ module Observability
     end
 
     test "traces other model operations with their usage" do
-      payload = { provider: "openai", model: "gpt-4o-mini-tts", tokens: RubyLLM::Tokens.new(input: 9), cost: FakeCost.new(0.001) }
+      payload = { provider: "openai", model: "gpt-image-1", tokens: RubyLLM::Tokens.new(input: 9), cost: FakeCost.new(0.001) }
 
-      instrument("speech.ruby_llm", payload)
+      instrument("image.ruby_llm", payload)
+
+      attributes = span("generate_content gpt-image-1").attributes
+
+      assert_equal "gen_ai.generate_content", attributes["sentry.op"]
+      assert_equal "image", attributes["ruby_llm.operation"]
+      assert_equal 9, attributes["gen_ai.usage.input_tokens"]
+    end
+
+    test "describes generated speech by its voice, format, and size, with the text read aloud as the input" do
+      instrument("speech.ruby_llm", speech_payload) { |payload| complete_speech(payload) }
 
       attributes = span("generate_content gpt-4o-mini-tts").attributes
 
       assert_equal "gen_ai.generate_content", attributes["sentry.op"]
+      assert_equal "generate_content", attributes["gen_ai.operation.name"]
       assert_equal "speech", attributes["ruby_llm.operation"]
-      assert_equal 9, attributes["gen_ai.usage.input_tokens"]
+      assert_equal "openai", attributes["gen_ai.provider.name"]
+      assert_equal "gpt-4o-mini-tts", attributes["gen_ai.request.model"]
+      assert_equal "marin", attributes["ruby_llm.speech.voice"]
+      assert_equal "mp3", attributes["ruby_llm.speech.format"]
+      assert_equal 48_000, attributes["ruby_llm.speech.audio_bytes"]
+      assert_equal [ { "role" => "user", "parts" => [ { "type" => "text", "content" => "ご注文の商品は明日お届けします。" } ] } ],
+        JSON.parse(attributes["gen_ai.input.messages"])
+      assert_not_includes attributes.keys, "gen_ai.output.messages"
+    end
+
+    test "leaves the text read aloud out when content capture is off, and still describes the speech" do
+      ActiveSupport::Notifications.unsubscribe(@subscription)
+      @subscription = ActiveSupport::Notifications.subscribe(/\.ruby_llm\z/, RubyLLMSpanSubscriber.new(tracer: @provider.tracer("test"), capture_content: false))
+
+      instrument("speech.ruby_llm", speech_payload) { |payload| complete_speech(payload) }
+
+      attributes = span("generate_content gpt-4o-mini-tts").attributes
+
+      assert_empty attributes.keys.grep(/messages/)
+      assert_equal "marin", attributes["ruby_llm.speech.voice"]
+      assert_equal "mp3", attributes["ruby_llm.speech.format"]
+      assert_equal 48_000, attributes["ruby_llm.speech.audio_bytes"]
+    end
+
+    test "leaves the input out when the text read aloud is empty, and still describes the speech" do
+      instrument("speech.ruby_llm", speech_payload.merge(input: "")) { |payload| complete_speech(payload) }
+
+      attributes = span("generate_content gpt-4o-mini-tts").attributes
+
+      assert_not_includes attributes.keys, "gen_ai.input.messages"
+      assert_equal "marin", attributes["ruby_llm.speech.voice"]
+      assert_equal "mp3", attributes["ruby_llm.speech.format"]
+      assert_equal 48_000, attributes["ruby_llm.speech.audio_bytes"]
+    end
+
+    test "marks failed speech as failed, without an audio size" do
+      assert_raises(RubyLLM::BadRequestError) do
+        instrument("speech.ruby_llm", speech_payload) { raise RubyLLM::BadRequestError.new("Input of 2345 tokens is over the maximum input limit of 2000 tokens") }
+      end
+
+      speech = span("generate_content gpt-4o-mini-tts")
+
+      assert_equal OpenTelemetry::Trace::Status::ERROR, speech.status.code
+      assert_equal "RubyLLM::BadRequestError", speech.attributes["error.type"]
+      assert_match(/maximum input limit of 2000 tokens/, speech.attributes["error.message"])
+      assert_not_includes speech.attributes.keys, "ruby_llm.speech.audio_bytes"
+      assert_equal "marin", speech.attributes["ruby_llm.speech.voice"], "the voice asked for"
+      assert_equal "mp3", speech.attributes["ruby_llm.speech.format"], "the format asked for"
     end
 
     test "ignores events that are not model work" do
@@ -388,6 +446,20 @@ module Observability
         provider: "openai", model: "gpt-5-nano", streaming: false,
         input_messages: [ FakeMessage.new(role: :user, content: "ping") ]
       }.merge(overrides)
+    end
+
+    # What RubyLLM.speak instruments before the provider answers: the voice
+    # and format asked for, and usage that stays empty for OpenAI.
+    def speech_payload
+      {
+        provider: "openai", model: "gpt-4o-mini-tts", input: "ご注文の商品は明日お届けします。",
+        voice: "marin", format: "mp3", provider_options: { instructions: "落ち着いた口調で" }, streaming: false,
+        tokens: RubyLLM::Tokens.new, cost: FakeCost.new(nil)
+      }
+    end
+
+    def complete_speech(payload)
+      payload.merge!(response_model: "gpt-4o-mini-tts", voice: "marin", format: "mp3", audio_bytes: 48_000)
     end
 
     def complete(payload, tokens: RubyLLM::Tokens.new(input: 13, output: 75), cost: 0.00003, response: nil)

@@ -13,6 +13,15 @@ module Runs
       assert_select "*", text: "Your order ships tomorrow."
     end
 
+    test "returns the generated speech of a run that succeeded" do
+      run = create_speech_run
+
+      get run_status_path(run)
+
+      assert_no_match(/<html/, response.body)
+      assert_shows_speech(run)
+    end
+
     test "returns the approval request while the run waits for a decision" do
       run = create_awaiting_run
 

@@ -137,6 +137,24 @@ module Observability
       end
       attributes.merge!(usage_attributes(payload[:tokens], payload[:cost]))
       attributes.merge!(chat_attributes(payload)) if name == "chat.ruby_llm"
+      attributes.merge!(speech_attributes(payload)) if name == "speech.ruby_llm"
+      attributes
+    end
+
+    # The voice and format are the ones the provider used once it answered,
+    # and the ones asked for when it failed. The text read aloud goes where
+    # a prompt goes; the output is audio, which the message attributes have
+    # no place for.
+    def speech_attributes(payload)
+      attributes = {
+        "ruby_llm.speech.voice" => payload[:voice]&.to_s,
+        "ruby_llm.speech.format" => payload[:format]&.to_s,
+        "ruby_llm.speech.audio_bytes" => payload[:audio_bytes]&.to_i
+      }
+      if @capture_content
+        input = RubyLLM::Message.new(role: :user, content: payload[:input].to_s)
+        attributes["gen_ai.input.messages"] = MessageFormatter.format([ input ]).presence&.to_json
+      end
       attributes
     end
 
