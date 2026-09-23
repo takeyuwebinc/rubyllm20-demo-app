@@ -162,6 +162,18 @@ module Demos
       assert_select "#count_tokens [data-input-error='question']", text: "入力してください"
     end
 
+    test "drops a value sent under the name of a document, keeping only the inputs" do
+      with_demos(demos_with_documents(TWO_DOCUMENTS)) do
+        assert_difference(-> { Run.count }) do
+          with_openai_key("sk-test") do
+            post demo_runs_path("documents-demo"), params: { run: { scenario_key: "answer_from_documents", input: { inquiry: "返品できますか", policy: "/etc/passwd" } } }
+          end
+        end
+      end
+
+      assert_equal({ "inquiry" => "返品できますか" }, Run.last.input)
+    end
+
     test "says in the scenario why it cannot run any more" do
       assert_no_difference(-> { Run.count }) do
         with_openai_key(nil) do

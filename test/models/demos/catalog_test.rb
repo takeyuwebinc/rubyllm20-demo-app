@@ -132,6 +132,50 @@ module Demos
       assert_not Catalog.scenario("tokenize_text").implemented?
     end
 
+    test "reads the documents of a scenario, in the order they are defined" do
+      scenario = build_scenario("documents" => [
+        { "name" => "policy", "label" => "返品ポリシー文書", "path" => "documents/return-policy.pdf" },
+        { "name" => "terms", "label" => "利用規約", "path" => "documents/terms.pdf" }
+      ])
+
+      assert_equal [
+        Scenario::Document.new(name: "policy", label: "返品ポリシー文書", path: "documents/return-policy.pdf"),
+        Scenario::Document.new(name: "terms", label: "利用規約", path: "documents/terms.pdf")
+      ], scenario.documents
+      assert_equal %w[/documents/return-policy.pdf /documents/terms.pdf], scenario.documents.map(&:url)
+    end
+
+    test "reads a scenario without documents, or with an empty list of them, as having none" do
+      assert_equal [], build_scenario({}).documents
+      assert_equal [], build_scenario("documents" => []).documents
+    end
+
+    test "refuses a document that lacks a name, a label, or a path" do
+      %w[name label path].each do |missing|
+        document = { "name" => "policy", "label" => "返品ポリシー文書", "path" => "documents/return-policy.pdf" }.except(missing)
+
+        error = assert_raises(KeyError, missing) { build_scenario("documents" => [ document ]) }
+        assert_match missing, error.message
+      end
+    end
+
+    # The handler takes them all as the keywords of one call, where a later
+    # value would win: a person's input could stand in for a document's path.
+    test "refuses a scenario whose inputs, models, and documents share a name" do
+      document = ->(name) { { "name" => name, "label" => "文書", "path" => "documents/return-policy.pdf" } }
+      input = ->(name) { { "name" => name, "label" => "入力" } }
+
+      [
+        { "inputs" => [ input.("policy") ], "documents" => [ document.("policy") ] },
+        { "models" => { "policy" => "claude-sonnet-5" }, "documents" => [ document.("policy") ] },
+        { "inputs" => [ input.("model") ], "models" => { "model" => "claude-sonnet-5" } },
+        { "documents" => [ document.("policy"), document.("policy") ] }
+      ].each do |attributes|
+        error = assert_raises(ArgumentError, attributes.inspect) { build_scenario(attributes) }
+        assert_match(/answer_from_documents/, error.message)
+      end
+    end
+
     # Availability is judged from the providers a scenario lists, while the
     # handler reaches the provider through the model id. They must agree.
     test "lists the provider each model of an implemented scenario resolves to" do
@@ -140,6 +184,22 @@ module Demos
           assert_includes scenario.providers, RubyLLM.models.find(model_id).provider, "#{scenario.key}: #{model_id}"
         end
       end
+    end
+
+    private
+
+    # One scenario built from its attributes as config/demos.yml would hold
+    # them, with the given ones in place of the defaults.
+    def build_scenario(overrides)
+      scenario = {
+        "key" => "answer_from_documents",
+        "name" => "文書に基づいて回答する",
+        "inputs" => [ { "name" => "inquiry", "label" => "問い合わせ文" } ],
+        "models" => { "model" => "claude-sonnet-5" }
+      }.merge(overrides)
+      demo = { "key" => "documents-demo", "name" => "文書", "summary" => "文書", "sources" => [], "scenarios" => [ scenario ] }
+
+      Catalog.build([ demo ]).sole.scenarios.sole
     end
   end
 end

@@ -429,6 +429,36 @@ class RunsControllerTest < ActionDispatch::IntegrationTest
     assert_select "*", text: "Where is my order?"
   end
 
+  test "links the documents of the scenario after the input, in a new tab" do
+    with_demos(demos_with_documents(TWO_DOCUMENTS)) do
+      get run_path(create_run(scenario_key: "answer_from_documents", input: { "inquiry" => "返品できますか" }))
+    end
+
+    assert_select "[data-run-documents] a[target='_blank'][rel='noopener']" do |links|
+      assert_equal [ "返品ポリシー文書（PDF、3 ページ）", "利用規約" ], links.map { |link| link.text.strip }
+      assert_equal [ "/documents/return-policy.pdf", "/documents/%E5%88%A9%E7%94%A8%20%E8%A6%8F%E7%B4%84.pdf" ], links.map { |link| link["href"] }
+    end
+    assert_match "返品できますか", css_select("[data-run-documents]").sole.previous_element.text
+  end
+
+  test "shows no documents on the run page of a scenario without them, or no longer defined" do
+    get run_path(create_run)
+
+    assert_select "*", text: "Where is my order?"
+    assert_select "[data-run-documents]", count: 0
+
+    with_demos(demos_with_documents([])) do
+      get run_path(create_run(scenario_key: "answer_from_documents", input: { "inquiry" => "返品できますか" }))
+    end
+
+    assert_select "*", text: "返品できますか"
+    assert_select "[data-run-documents]", count: 0
+
+    get run_path(create_run(scenario_key: "removed_scenario"))
+
+    assert_select "[data-run-documents]", count: 0
+  end
+
   test "opens the newest trace first, the older ones and the conversation beside it" do
     run = create_run(trace_ids: %w[11111111111111111111111111111111 22222222222222222222222222222222])
 

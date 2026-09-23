@@ -284,6 +284,7 @@ module Demos
         providers: %w[openai],
         models: { "model" => "gpt-5-nano" },
         inputs: [ Scenario::Input.new(name: "inquiry", label: "問い合わせ", default: "", required: true) ],
+        documents: [],
         handler_name: FakeHandler.name,
         result_kind: "text_answer",
         retryable: retryable

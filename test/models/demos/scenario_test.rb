@@ -96,6 +96,53 @@ module Demos
       assert_equal({ "inquiry" => "Where is my order?" }, scenario.input_values({}))
     end
 
+    # Stands in for a handler, keeping the keywords it was called with.
+    class RecordingHandler
+      class << self
+        attr_accessor :arguments
+
+        def perform(**arguments)
+          self.arguments = arguments
+          { "answer" => "ok" }
+        end
+      end
+    end
+
+    test "hands the handler the inputs, the models, and each document's absolute path, as keywords in the order of the definition" do
+      scenario = scenario(handler_name: RecordingHandler.name, documents: [
+        Scenario::Document.new(name: "policy", label: "返品ポリシー", path: "documents/return-policy.pdf"),
+        Scenario::Document.new(name: "terms", label: "利用規約", path: "documents/terms.pdf")
+      ])
+
+      scenario.perform("inquiry" => "返品できますか")
+
+      assert_equal({
+        inquiry: "返品できますか",
+        model: "gpt-5-nano",
+        policy: Rails.root.join("public/documents/return-policy.pdf"),
+        terms: Rails.root.join("public/documents/terms.pdf")
+      }, RecordingHandler.arguments)
+      assert_equal %i[inquiry model policy terms], RecordingHandler.arguments.keys
+      assert_kind_of Pathname, RecordingHandler.arguments[:policy]
+      assert_predicate RecordingHandler.arguments[:policy], :absolute?
+    end
+
+    test "hands the handler only the inputs and the models when it has no documents" do
+      scenario(handler_name: RecordingHandler.name).perform("inquiry" => "返品できますか")
+
+      assert_equal({ inquiry: "返品できますか", model: "gpt-5-nano" }, RecordingHandler.arguments)
+    end
+
+    test "serves a document from the root, escaping its path for a link" do
+      policy = Scenario::Document.new(name: "policy", label: "返品ポリシー", path: "documents/return-policy.pdf")
+      terms = Scenario::Document.new(name: "terms", label: "利用規約", path: "documents/利用 規約.pdf")
+
+      assert_equal "/documents/return-policy.pdf", policy.url
+      assert_equal "/documents/%E5%88%A9%E7%94%A8%20%E8%A6%8F%E7%B4%84.pdf", terms.url
+      assert_equal "return-policy.pdf", policy.filename
+      assert_equal "利用 規約.pdf", terms.filename
+    end
+
     test "reads the source of its handler, where the code it runs lives" do
       scenario = Catalog.scenario("answer_inquiry")
 
@@ -113,6 +160,7 @@ module Demos
         providers: %w[openai],
         models: { "model" => "gpt-5-nano" },
         inputs: [ Scenario::Input.new(name: "inquiry", label: "問い合わせ", default: "Where is my order?", required: true) ],
+        documents: [],
         handler_name: "Object",
         result_kind: "text_answer",
         retryable: true,

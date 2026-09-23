@@ -256,6 +256,32 @@ class DemosControllerTest < ActionDispatch::IntegrationTest
     assert_select "a[href='https://rubyllm.com/citations/']"
   end
 
+  test "links each document of a scenario before its inputs, in a new tab, in the order of the definition" do
+    with_demos(demos_with_documents(TWO_DOCUMENTS)) do
+      with_openai_key("sk-test") { get demo_path("documents-demo") }
+    end
+
+    assert_select "#answer_from_documents [data-scenario-documents] a[target='_blank'][rel='noopener']" do |links|
+      assert_equal [ "返品ポリシー文書（PDF、3 ページ）", "利用規約" ], links.map { |link| link.text.strip }
+      assert_equal [ "/documents/return-policy.pdf", "/documents/%E5%88%A9%E7%94%A8%20%E8%A6%8F%E7%B4%84.pdf" ], links.map { |link| link["href"] }
+    end
+    assert_before "#answer_from_documents [data-scenario-documents]", "#answer_from_documents textarea"
+  end
+
+  test "shows no documents for a scenario without them, or with an empty list of them" do
+    with_openai_key("sk-test") { get demo_path("responses-api") }
+
+    assert_select "#answer_inquiry textarea"
+    assert_select "[data-scenario-documents]", count: 0
+
+    with_demos(demos_with_documents([])) do
+      with_openai_key("sk-test") { get demo_path("documents-demo") }
+    end
+
+    assert_select "#answer_from_documents textarea"
+    assert_select "[data-scenario-documents]", count: 0
+  end
+
   test "lists the recent runs of the demo" do
     run = create_run
 
