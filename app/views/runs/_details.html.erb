@@ -31,6 +31,13 @@
         <p data-sentry-links class="text-sm text-gray-500">Sentry へのリンクには、<code>.env</code> の <code>SENTRY_ORG</code> と <code>SENTRY_DSN</code> が要る。</p>
       <% end %>
     </div>
+    <%# Shown for as long as the run keeps the id, finished or not: it says the provider holds the work, and gives the id
+        to open that work again from a console. Work that is checked on has a section of its own below, with the id. %>
+    <% if run.remote_job_id && !run.remote_job %>
+      <p data-remote-job-id class="mt-2 text-sm text-gray-600">
+        プロバイダー側の処理の ID: <code class="rounded bg-gray-100 px-1 py-0.5 break-all"><%= run.remote_job_id %></code>
+      </p>
+    <% end %>
     <% if run.running? %>
       <p class="mt-2 max-w-prose text-sm text-gray-500">
         進まない場合は、ジョブのワーカーが動いているかを確かめる。<code>bin/dev</code> で起動すると、Web のサーバーと一緒に動く。
@@ -38,8 +45,19 @@
     <% end %>
   </div>
 
-  <% if run.remote_job? %>
+  <% if run.remote_job %>
     <%= render "runs/remote_job", run: run %>
+  <% end %>
+
+  <% if run.running? && run.retries.positive? %>
+    <section data-retry class="max-w-prose rounded-md border border-amber-200 bg-amber-50 p-4">
+      <p class="text-sm text-amber-900">
+        続きの取得に失敗し、<%= Demos::RunJob::RETRY_INTERVAL.in_minutes.to_i %> 分後にやり直す（<%= run.retries %> 回目、上限 <%= Demos::Run::MAX_RETRIES %> 回）。
+      </p>
+      <div class="mt-3">
+        <%= render "runs/failure_reason", failure: run.failure, title_class: "text-amber-900", message_class: "text-amber-950" %>
+      </div>
+    </section>
   <% end %>
 
   <% if run.awaiting_approval? %>
@@ -69,17 +87,8 @@
   <%# A run cancelled at the provider says why, as a failed one does. The reason comes before the result: a failed or
       cancelled run's result holds only what the provider finished. %>
   <% if run.failed? || (run.cancelled? && run.failure) %>
-    <% failure = run.failure || {} %>
     <section data-failure class="max-w-prose rounded-md border border-red-200 bg-red-50 p-4">
-      <p class="font-semibold text-red-800">
-        <%= failure["kind"] %><% if failure["provider"].present? %>（<%= failure["provider"] %>）<% end %>
-      </p>
-      <% if failure["message"].present? %>
-        <p class="mt-2 whitespace-pre-wrap break-words text-sm text-red-900"><%= failure["message"] %></p>
-      <% end %>
-      <% if failure["hint"].present? %>
-        <p class="mt-2 text-sm text-gray-700">原因の候補: <%= failure["hint"] %></p>
-      <% end %>
+      <%= render "runs/failure_reason", failure: run.failure || {}, title_class: "text-red-800", message_class: "text-red-900" %>
     </section>
   <% end %>
 

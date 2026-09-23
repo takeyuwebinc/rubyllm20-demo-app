@@ -1,11 +1,17 @@
 module Demos
   # Runs one scenario against its provider and records how it ended.
   #
-  # The job itself never retries: every retry would call the provider and pay
-  # again. RubyLLM already retries timeouts, rate limits, and server errors
-  # inside one run.
+  # The job itself never retries a call that starts work: every retry would
+  # call the provider and pay again. RubyLLM already retries timeouts, rate
+  # limits, and server errors inside one run. Waiting on, or checking on,
+  # work kept at the provider is different: it only fetches the work's
+  # state, which costs nothing, so a failure that may pass is tried again
+  # later.
   class RunJob < ApplicationJob
     queue_as :default
+
+    # How long a run waiting on the provider rests before it is tried again.
+    RETRY_INTERVAL = 1.minute
 
     # How often a run checks on the work it left with a provider, until the
     # work ends. A batch takes minutes to hours, and a check costs only a
@@ -22,9 +28,14 @@ module Demos
         nil
       end
 
+      # Queues the job that tries the run again after RETRY_INTERVAL.
+      def retry_later(run)
+        set(wait: RETRY_INTERVAL).perform_later(run)
+      end
+
       # Hands the runs of the given Solid Queue jobs, which a dead worker had
-      # claimed and Solid Queue will not run again, to Run.fail_abandoned!,
-      # which fails each run or queues its job again.
+      # claimed and Solid Queue will not run again, to the run to fail or to
+      # queue again.
       def fail_abandoned(solid_queue_job_ids, error = nil)
         runs = SolidQueue::Job.where(id: solid_queue_job_ids, class_name: name).filter_map { |job| run_from(job.arguments) }
         Run.fail_abandoned!(runs.map(&:id), message: error&.message)
@@ -38,45 +49,73 @@ module Demos
 
       scenario = run.scenario or raise ArgumentError, "Scenario #{run.scenario_key} is not defined"
       # A run that stopped for approval continues its chat, whose records
-      # hold how far it got, so this is safe however often the job runs.
+      # hold how far it got, so this is safe however often the job runs. A
+      # run that left work with the provider waits for it by the id it
+      # keeps, which is just as safe.
       chat = Chat.find(run.chat_id) if run.chat_id
-      # Likewise, a run that left work with a provider goes on from that
-      # work, whose state the provider holds.
-      return continue_remote_job(run, scenario) if run.remote_job? && !chat
+      continued = chat || run.remote_job_id
+      # Work the scenario checks on rather than waits for, such as a batch,
+      # is checked on and collected outside the workflow that started it.
+      return continue_remote_job(run, scenario) if run.remote_job_id && !chat && scenario.checks_remote_job?
 
       # Solid Queue puts a job back in the queue when its worker stops
       # gracefully. A scenario that must not start over, and has neither a
-      # chat nor work with a provider to continue, has nothing to go on with.
-      if run.started_at && !scenario.retryable && !chat
+      # chat to continue nor work to wait for, has nothing to go on with.
+      if run.started_at && !scenario.retryable && !continued
         run.fail_as!(FailureKinds::INTERRUPTED)
         return
       end
 
       # A continued run keeps its started_at: it tells a job that ran again
-      # from a first run.
-      run.update!(started_at: Time.current) unless chat
+      # from a first run, and dates the links to the run's traces.
+      run.update!(started_at: Time.current) unless continued
+      # One workflow per job, so a run that is not interrupted leaves its
+      # work with the provider and collects it in one trace. A job that runs
+      # again adds a trace of its own to the same conversation.
       outcome = in_workflow(run, scenario) do
         record_trace(run)
-        chat ? scenario.resume(chat) : scenario.perform(run.input)
+        run_scenario(run, scenario, chat)
       end
       record(run, scenario, outcome)
     rescue StandardError => error
-      run.fail_with!(error)
-      # A provider failure is shown on the run page with its likely causes.
-      # Only an error that points to a bug in this app is reported.
-      unless FailureKinds.provider_call?(error)
-        Rails.error.report(error, context: { run_id: run.id, scenario_key: run.scenario_key, conversation_id: run.conversation_id })
-      end
+      record_failure(run, error)
     end
 
     private
 
-    def workflow_name(scenario)
-      "#{scenario.demo&.name}: #{scenario.name}"
-    end
-
     def in_workflow(run, scenario, &)
       RubyLLM.workflow(workflow_name(scenario), metadata: { conversation_id: run.conversation_id }, &)
+    end
+
+    # Work left with the provider is waited for in this job, right after its
+    # id is kept. Waiting with RubyLLM.animate would keep no id, so a result
+    # that finished while the app was down could not be collected. Checking
+    # from a job scheduled every so often would open a workflow, and a trace,
+    # for every check, where waiting here keeps a run in one trace unless it
+    # is interrupted. The wait holds one of the worker's threads for as long
+    # as the work takes.
+    def run_scenario(run, scenario, chat)
+      return scenario.resume(chat) if chat
+      return scenario.resume_remote_job(run.remote_job_id) if run.remote_job_id
+
+      outcome = scenario.perform(run.input)
+      return outcome unless remote_job?(outcome)
+      # Work the scenario checks on is handed back as it is, to be kept and
+      # checked on by later jobs.
+      return outcome if scenario.checks_remote_job?
+
+      # Kept before waiting, so that a job stopped while it waits goes on
+      # from the id instead of leaving the work, and paying for it, again.
+      run.record_remote_job_id!(outcome.id)
+      scenario.resume_remote_job(outcome.id)
+    end
+
+    # Work left with the provider, such as RubyLLM's VideoJob, ResearchJob,
+    # and Batch, told apart by what it answers to rather than by its class,
+    # as a generated file is by to_blob and mime_type. A result is a Hash
+    # and a chat has no status, so neither is mistaken for one.
+    def remote_job?(outcome)
+      outcome.respond_to?(:id) && outcome.respond_to?(:status)
     end
 
     # Checks on the work outside any workflow: a check every minute, for as
@@ -86,19 +125,12 @@ module Demos
     # and an expired one bills it. The trace of a collection is recorded
     # only once it got through, as a failed one is tried again a minute
     # later.
-    #
-    # Only a handler that has .check leaves work that ends on its own time.
-    # TODO(when a handler leaves work with a provider but has no .check, as
-    # the video and research scenarios do): call its .resume inside the
-    # workflow, where it waits for the work, instead of checking every
-    # minute. Work that ends within minutes to two hours is waited on in
-    # one job and one trace; only a batch, which may take a day, is checked.
     def continue_remote_job(run, scenario)
-      state = scenario.check(run.remote_job)
+      state = scenario.check_remote_job(run.remote_job_id)
       run.record_remote_check!(state)
       return check_later(run) if state.pending?
 
-      result = in_workflow(run, scenario) { scenario.resume(run.remote_job).tap { record_trace(run) } }
+      result = in_workflow(run, scenario) { scenario.collect_remote_job(run.remote_job_id).tap { record_trace(run) } }
       finish_remote_job(run, state, result)
     rescue StandardError => error
       raise unless FailureKinds.provider_call?(error)
@@ -110,6 +142,9 @@ module Demos
     # RubyLLM's own retries are over within about a second, while the work
     # goes on at the provider regardless, and checking and collecting it
     # again are safe. Past the run's deadline, it gives up with the error.
+    # The deadline is a time rather than the count of retries a waited-for
+    # run has: a batch is checked on every minute for up to a day, so a
+    # count would be reached by a short outage.
     def carry_over(run, error)
       if run.remote_job_overdue?
         run.fail_with!(error)
@@ -151,6 +186,10 @@ module Demos
       }
     end
 
+    def workflow_name(scenario)
+      "#{scenario.demo&.name}: #{scenario.name}"
+    end
+
     # A span is open only while its instrumented block runs, so the trace
     # exists only inside the workflow. Without tracing there is none to keep.
     def record_trace(run)
@@ -159,9 +198,9 @@ module Demos
     end
 
     # A scenario hands back its result, the chat it stopped on for a
-    # person's approval, or the work it left with a provider. What to keep
-    # of each, such as the files a result holds, is the run's to decide;
-    # the job only hands it over.
+    # person's approval, or the work it left with a provider to be checked
+    # on. What to keep of each, such as the files a result holds, is the
+    # run's to decide; the job only hands it over.
     def record(run, scenario, outcome)
       if outcome.is_a?(Chat)
         run.await_approval!(outcome)
@@ -173,12 +212,27 @@ module Demos
       end
     end
 
-    # Work left with a provider, such as RubyLLM's Batch, ResearchJob, and
-    # VideoJob, has an id to find it by and a status. It is told by those
-    # methods rather than by its class, as a generated file is by to_blob
-    # and mime_type.
-    def remote_job?(outcome)
-      outcome.respond_to?(:id) && outcome.respond_to?(:status)
+    # Cancellation, expiry, and trying again are what the provider answered,
+    # not bugs of this app, so none of them is reported. Only a run waiting
+    # on work kept at the provider expires or is tried again: a chat is
+    # continued by calling the model, which would pay again.
+    def record_failure(run, error)
+      waiting_on_provider = run.remote_job_id.present? && run.chat_id.nil?
+
+      if FailureKinds.cancelled?(error)
+        run.cancel_with!(error)
+      elsif waiting_on_provider && FailureKinds.not_found?(error)
+        run.fail_with!(error, kind: FailureKinds::EXPIRED)
+      elsif waiting_on_provider && FailureKinds.retry_later?(error) && run.retry_later!(error)
+        self.class.retry_later(run)
+      else
+        run.fail_with!(error)
+        # A provider failure is shown on the run page with its likely causes.
+        # Only an error that points to a bug in this app is reported.
+        unless FailureKinds.provider_call?(error)
+          Rails.error.report(error, context: { run_id: run.id, scenario_key: run.scenario_key, conversation_id: run.conversation_id })
+        end
+      end
     end
   end
 end

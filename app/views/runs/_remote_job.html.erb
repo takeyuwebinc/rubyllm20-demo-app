@@ -6,7 +6,7 @@
   <h2 class="font-semibold text-gray-900">プロバイダーに投入済み</h2>
   <dl class="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-sm">
     <dt class="text-gray-500">バッチ ID</dt>
-    <dd data-remote-job-id class="break-all font-mono text-gray-900"><%= remote_job["id"] %></dd>
+    <dd data-remote-job-id class="break-all font-mono text-gray-900"><%= run.remote_job_id %></dd>
     <dt class="text-gray-500">プロバイダー</dt>
     <dd class="text-gray-800"><%= Demos.provider_name(remote_job["provider"]) %></dd>
     <dt class="text-gray-500">プロバイダーの状態</dt>

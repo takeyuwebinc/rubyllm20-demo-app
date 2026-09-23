@@ -8,6 +8,28 @@ module Demos
     # A generated file without a format, as RubyLLM's Video and Image have none.
     GeneratedClip = Struct.new(:to_blob, :mime_type)
 
+    # A video that holds only a URL, as RubyLLM's Video from xAI does: every
+    # to_blob downloads it. It notes how many transactions were open at the
+    # time, and how often it was read.
+    class DownloadedClip
+      attr_reader :mime_type, :reads, :open_transactions
+
+      def initialize(bytes: "mp4 bytes", error: nil)
+        @bytes = bytes
+        @error = error
+        @mime_type = "video/mp4"
+        @reads = 0
+      end
+
+      def to_blob
+        @reads += 1
+        @open_transactions = Run.connection.open_transactions
+        raise @error if @error
+
+        @bytes
+      end
+    end
+
     test "starts a run with the given input and queues its job" do
       run = Run.start(runnable_scenario, "inquiry" => "Where is my order?")
 
@@ -109,6 +131,51 @@ module Demos
       assert_equal %w[speech.mp3 video.mp4], run.generated_files.map { |file| file.filename.to_s }.sort
       assert_equal({ "filename" => "speech.mp3", "content_type" => "audio/mpeg", "byte_size" => 3 }, run.result["speech"])
       assert_equal({ "filename" => "video.mp4", "content_type" => "video/mp4", "byte_size" => 9 }, run.result["video"])
+    end
+
+    test "downloads a generated file once, before the transaction that records the result opens" do
+      run = create_run
+      clip = DownloadedClip.new(bytes: "x" * 2_048)
+      outside = Run.connection.open_transactions
+
+      run.succeed!({ "video" => clip, "model" => "grok-imagine-video-1.5" })
+
+      assert_equal 1, clip.reads
+      assert_equal outside, clip.open_transactions
+      run.reload
+      assert_predicate run, :succeeded?
+      file = run.generated_files.sole
+      assert_equal "x" * 2_048, file.download
+      assert_equal({ "filename" => "video.mp4", "content_type" => "video/mp4", "byte_size" => 2_048 }, run.result["video"])
+    end
+
+    test "keeps nothing and stays running when downloading a generated file fails" do
+      run = create_run
+      clip = DownloadedClip.new(error: Faraday::ResourceNotFound.new("the server responded with status 404"))
+
+      assert_no_difference([ -> { ActiveStorage::Blob.count }, -> { ActiveStorage::Attachment.count } ]) do
+        error = assert_raises(Faraday::ResourceNotFound) { run.succeed!({ "video" => clip, "model" => "grok-imagine-video-1.5" }) }
+        assert_equal "the server responded with status 404", error.message
+      end
+
+      run.reload
+      assert_predicate run, :running?
+      assert_nil run.result
+      assert_nil run.finished_at
+      assert_empty run.generated_files
+    end
+
+    test "never downloads a generated file for a finished run or a run waiting for approval" do
+      runs = %w[succeeded failed cancelled].map { |status| create_run(status: status, finished_at: 1.minute.ago) }
+      runs << create_awaiting_run
+
+      runs.each do |run|
+        clip = DownloadedClip.new
+
+        assert_raises(ActiveRecord::RecordInvalid, run.status) { run.succeed!({ "video" => clip }) }
+
+        assert_equal 0, clip.reads, run.status
+      end
     end
 
     test "keeps no attachment for a result without generated files" do
@@ -225,6 +292,18 @@ module Demos
       assert_equal "OpenAI", run.failure["provider"]
     end
 
+    test "records a provider failure as the kind it is given" do
+      run = create_run
+
+      run.fail_with!(RubyLLM::Error.new("Not found"), kind: FailureKinds::EXPIRED)
+
+      assert_predicate run.reload, :failed?
+      assert_equal "期限切れ", run.failure["kind"]
+      assert_equal "RubyLLM::Error", run.failure["error_class"]
+      assert_equal "Not found", run.failure["message"]
+      assert_match "7 日", run.failure["hint"]
+    end
+
     test "records an error outside the table by its class, without causes" do
       run = create_run
 
@@ -264,12 +343,12 @@ module Demos
       end
 
       assert_predicate run.reload, :running?
+      assert_equal "batch_1", run.remote_job_id
       assert_equal({
-        "kind" => "batch", "id" => "batch_1", "provider" => "openai", "submitted_at" => "2026-09-23T10:00:00.000+09:00",
+        "kind" => "batch", "provider" => "openai", "submitted_at" => "2026-09-23T10:00:00.000+09:00",
         "raw_status" => "validating", "request_counts" => { "total" => 5, "completed" => 0, "failed" => 0 },
         "checked_at" => nil, "check_failure" => nil
       }, run.remote_job)
-      assert_predicate run, :remote_job?
       assert_nil run.finished_at
     end
 
@@ -295,7 +374,7 @@ module Demos
       assert_equal({ "total" => 5, "completed" => 2, "failed" => 1 }, remote_job["request_counts"])
       assert_equal "2026-09-23T10:05:00.000+09:00", remote_job["checked_at"]
       assert_nil remote_job["check_failure"]
-      assert_equal "batch_1", remote_job["id"]
+      assert_equal "batch_1", run.remote_job_id
       assert_predicate run, :running?
     end
 
@@ -318,9 +397,9 @@ module Demos
       run = create_run
       run.keep_remote_job!(remote_state)
 
-      run.record_remote_check_failure!(RubyLLM::Error.new("Not found"))
+      run.record_remote_check_failure!(JSON::ParserError.new("unexpected token"))
 
-      assert_equal "RubyLLM::Error", run.reload.remote_job["check_failure"]["kind"]
+      assert_equal "JSON::ParserError", run.reload.remote_job["check_failure"]["kind"]
     end
 
     test "gives up on kept work only after 48 hours from its submission" do
@@ -365,9 +444,9 @@ module Demos
       [ succeeded, failed, cancelled ].each do |run|
         before = run.reload.attributes
         assert_raises(ActiveRecord::RecordInvalid) { run.keep_remote_job!(remote_state) }
-        assert_raises(ActiveRecord::RecordInvalid) { run.record_remote_check!(remote_state) }
-        assert_raises(ActiveRecord::RecordInvalid) { run.record_remote_check_failure!(Faraday::ConnectionFailed.new("refused")) }
-        assert_raises(ActiveRecord::RecordInvalid) { run.cancel!({ "kind" => "プロバイダー側の処理の取り消し" }, result: { "tickets" => [] }) }
+        assert_raises(ArgumentError) { run.record_remote_check!(remote_state) }
+        assert_raises(ArgumentError) { run.record_remote_check_failure!(Faraday::ConnectionFailed.new("refused")) }
+        assert_raises(ArgumentError) { run.cancel!({ "kind" => "プロバイダー側の処理の取り消し" }, result: { "tickets" => [] }) }
         assert_raises(ActiveRecord::RecordInvalid) { run.fail!({ "kind" => "プロバイダー側の処理の失敗" }, result: { "tickets" => [] }) }
         assert_equal before, run.reload.attributes, run.status
       end
@@ -377,9 +456,10 @@ module Demos
       run = create_awaiting_run
 
       assert_raises(ActiveRecord::RecordInvalid) { run.keep_remote_job!(remote_state) }
-      assert_raises(ActiveRecord::RecordInvalid) { run.cancel!({ "kind" => "プロバイダー側の処理の取り消し" }) }
+      assert_raises(ArgumentError) { run.cancel!({ "kind" => "プロバイダー側の処理の取り消し" }) }
 
       assert_predicate run.reload, :awaiting_approval?
+      assert_nil run.remote_job_id
       assert_nil run.remote_job
     end
 
@@ -390,22 +470,11 @@ module Demos
       Run.fail_abandoned!([ run.id ], message: "pid 42 died")
 
       assert_predicate run.reload, :running?
-      assert_equal "batch_1", run.remote_job["id"]
+      assert_equal "batch_1", run.remote_job_id
       assert_enqueued_with(job: RunJob, args: [ run ])
     end
 
-    test "fails a run a dead worker left more than 48 hours after it left work with a provider" do
-      run = create_run
-      travel_to(Time.zone.local(2026, 9, 21, 10, 0, 0)) { run.keep_remote_job!(remote_state) }
-
-      travel_to(Time.zone.local(2026, 9, 23, 10, 0, 1)) { Run.fail_abandoned!([ run.id ]) }
-
-      assert_predicate run.reload, :failed?
-      assert_equal "ワーカーの異常終了", run.failure["kind"]
-      assert_no_enqueued_jobs
-    end
-
-    test "fails the runs a dead worker left running, and only those" do
+    test "fails the runs a dead worker left running with nothing kept at the provider, and only those" do
       abandoned = create_run
       finished = create_run.tap { |run| run.succeed!({ "answer" => "done" }) }
       awaiting = create_awaiting_run
@@ -416,6 +485,214 @@ module Demos
       assert_equal "ワーカーの異常終了", abandoned.failure["kind"]
       assert_predicate finished.reload, :succeeded?
       assert_predicate awaiting.reload, :awaiting_approval?
+      assert_no_enqueued_jobs
+    end
+
+    test "queues again a run a dead worker left waiting on work kept at the provider" do
+      run = create_run(started_at: 5.minutes.ago)
+      run.record_remote_job_id!("interactions/abc")
+
+      Run.fail_abandoned!([ run.id ], message: "Worker 42 died")
+
+      run.reload
+      assert_predicate run, :running?
+      assert_equal 1, run.retries
+      assert_equal "ワーカーの異常終了", run.failure["kind"]
+      assert_equal "Worker 42 died", run.failure["message"]
+      assert_enqueued_with(job: RunJob, args: [ run ])
+    end
+
+    test "fails a run a dead worker left waiting on the provider once it has been tried again as often as allowed" do
+      run = create_run(started_at: 5.minutes.ago, failure: { "kind" => "接続の失敗", "retries" => Run::MAX_RETRIES - 1 })
+      run.record_remote_job_id!("interactions/abc")
+
+      Run.fail_abandoned!([ run.id ])
+
+      assert_predicate run.reload, :running?
+      assert_equal Run::MAX_RETRIES, run.retries
+      assert_enqueued_with(job: RunJob, args: [ run ])
+      clear_enqueued_jobs
+
+      Run.fail_abandoned!([ run.id ])
+
+      assert_predicate run.reload, :failed?
+      assert_equal "ワーカーの異常終了", run.failure["kind"]
+      assert_no_enqueued_jobs
+    end
+
+    test "records that the provider cancelled the work, with the reason" do
+      run = create_run
+
+      run.cancel_with!(RubyLLM::ResearchJob::Error.new("Research cancelled:  (job abc)", job: nil))
+
+      run.reload
+      assert_predicate run, :cancelled?
+      assert_not_nil run.finished_at
+      assert_equal "取り消し", run.failure["kind"]
+      assert_equal "OpenAI", run.failure["provider"]
+      assert_equal "Research cancelled:  (job abc)", run.failure["message"]
+      assert_match "取り消", run.failure["hint"]
+    end
+
+    test "records a cancellation on a run waiting for approval" do
+      run = create_awaiting_run
+
+      run.cancel_with!(RuntimeError.new("cancelled"))
+
+      assert_predicate run.reload, :cancelled?
+    end
+
+    test "never records a cancellation on a finished run" do
+      %w[succeeded failed cancelled].each do |status|
+        run = create_run(status: status, failure: { "kind" => "before" }, finished_at: 1.minute.ago)
+
+        assert_raises(ActiveRecord::RecordInvalid, status) { run.cancel_with!(RuntimeError.new("late")) }
+
+        run.reload
+        assert_equal status, run.status
+        assert_equal({ "kind" => "before" }, run.failure, status)
+      end
+    end
+
+    test "keeps a failure to try again later on a run that stays running, and counts it" do
+      run = create_run
+
+      assert run.retry_later!(RubyLLM::UnauthorizedError.new("invalid_grant"))
+
+      run.reload
+      assert_predicate run, :running?
+      assert_nil run.finished_at
+      assert_equal 1, run.retries
+      assert_equal "認証の失敗", run.failure["kind"]
+      assert_equal "OpenAI", run.failure["provider"]
+      assert_equal "invalid_grant", run.failure["message"]
+      assert_match "gcloud", run.failure["hint"]
+
+      assert run.retry_later!(Faraday::ConnectionFailed.new("refused"))
+      assert_equal 2, run.reload.retries
+      assert_equal "接続の失敗", run.failure["kind"]
+    end
+
+    test "forgets the failures it tried again after once the run succeeds" do
+      run = create_run
+      run.retry_later!(Faraday::ConnectionFailed.new("refused"))
+
+      run.succeed!({ "answer" => "done" })
+
+      assert_nil run.reload.failure
+      assert_equal 0, run.retries
+    end
+
+    test "tries again up to the limit, and then says no without counting" do
+      run = create_run(failure: { "kind" => "接続の失敗", "retries" => Run::MAX_RETRIES - 1 })
+
+      assert run.retry_later!(Faraday::ConnectionFailed.new("refused"))
+      assert_equal 60, run.reload.retries
+
+      refute run.retry_later!(Faraday::ConnectionFailed.new("refused again"))
+      run.reload
+      assert_equal 60, run.retries
+      assert_equal "refused", run.failure["message"]
+      assert_predicate run, :running?
+    end
+
+    test "keeps a failure to try again later only on a running run" do
+      finished = create_run.tap { |run| run.succeed!({ "answer" => "done" }) }
+      awaiting = create_awaiting_run
+
+      [ finished, awaiting ].each do |run|
+        assert_raises(ArgumentError, run.status) { run.retry_later!(Faraday::ConnectionFailed.new("refused")) }
+        assert_nil run.reload.failure, run.status
+      end
+      assert_predicate finished, :succeeded?
+      assert_predicate awaiting, :awaiting_approval?
+    end
+
+    test "queues again the job of a run a dead worker left waiting on the provider, and keeps it running" do
+      waiting = create_run(remote_job_id: "video-1")
+
+      Run.fail_abandoned!([ waiting.id ], message: "Process pid=1 exited unexpectedly")
+
+      waiting.reload
+      assert_predicate waiting, :running?
+      assert_equal "ワーカーの異常終了", waiting.failure["kind"]
+      assert_equal 1, waiting.retries
+      assert_nil waiting.finished_at
+      assert_equal "video-1", waiting.remote_job_id
+      assert_enqueued_with(job: RunJob, args: [ waiting ])
+    end
+
+    test "fails or queues again each run a dead worker left, by whether it waits on the provider" do
+      waiting = create_run(remote_job_id: "video-1")
+      abandoned = create_run
+      finished = create_run(remote_job_id: "video-2").tap { |run| run.succeed!({ "answer" => "done" }) }
+
+      Run.fail_abandoned!([ waiting.id, abandoned.id, finished.id ])
+
+      assert_predicate waiting.reload, :running?
+      assert_predicate abandoned.reload, :failed?
+      assert_equal "ワーカーの異常終了", abandoned.failure["kind"]
+      assert_predicate finished.reload, :succeeded?
+      assert_enqueued_jobs 1
+      assert_enqueued_with(job: RunJob, args: [ waiting ])
+    end
+
+    test "does nothing when a dead worker left no job" do
+      running = create_run
+
+      Run.fail_abandoned!([])
+
+      assert_predicate running.reload, :running?
+      assert_no_enqueued_jobs
+    end
+
+    test "keeps the id of the work left with the provider, and nothing else changes" do
+      started_at = 1.minute.ago.change(usec: 0)
+      run = create_run(started_at: started_at)
+
+      run.record_remote_job_id!("video-1")
+
+      run.reload
+      assert_equal "video-1", run.remote_job_id
+      assert_predicate run, :running?
+      assert_equal started_at, run.started_at
+      assert_nil run.result
+      assert_nil run.finished_at
+    end
+
+    test "refuses a blank id of the work left with the provider" do
+      run = create_run
+
+      [ nil, "", "  " ].each do |id|
+        assert_raises(ArgumentError, id.inspect) { run.record_remote_job_id!(id) }
+      end
+
+      run.reload
+      assert_nil run.remote_job_id
+      assert_predicate run, :running?
+    end
+
+    test "refuses to keep another id for a run that already keeps one" do
+      run = create_run(remote_job_id: "video-1")
+
+      assert_raises(ActiveRecord::RecordInvalid) { run.record_remote_job_id!("video-2") }
+
+      assert_equal "video-1", run.reload.remote_job_id
+    end
+
+    test "refuses to keep an id for a finished run or a run waiting for approval" do
+      runs = %w[succeeded failed cancelled].map { |status| create_run(status: status, finished_at: 1.minute.ago) }
+      runs << create_awaiting_run
+
+      runs.each do |run|
+        status = run.status
+
+        assert_raises(ActiveRecord::RecordInvalid, status) { run.record_remote_job_id!("video-1") }
+
+        run.reload
+        assert_nil run.remote_job_id, status
+        assert_equal status, run.status
+      end
     end
 
     test "lists the runs of a demo, newest first" do
@@ -528,6 +805,7 @@ module Demos
         providers: [],
         models: {},
         inputs: [ Scenario::Input.new(name: "inquiry", label: "問い合わせ", default: "Hi", required: true) ],
+        documents: [],
         handler_name: "Object",
         result_kind: "text_answer",
         retryable: true,

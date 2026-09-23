@@ -56,6 +56,7 @@ ActiveRecord::Schema[8.1].define(version: 2026_09_23_090000) do
     t.datetime "finished_at"
     t.json "input", default: {}, null: false
     t.json "remote_job"
+    t.string "remote_job_id"
     t.json "result"
     t.string "scenario_key", null: false
     t.datetime "started_at"

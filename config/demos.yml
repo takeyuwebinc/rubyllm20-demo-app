@@ -6,8 +6,9 @@
 #
 # A scenario with no handler is being prepared. An implemented scenario lists
 # its providers (used to tell whether it can run), its models by the keyword
-# the handler takes, its inputs, how to show its result, and whether a job
-# that runs again may start it over (retryable). A scenario that submits work
+# the handler takes, its inputs, the documents it hands the handler (files
+# under public/, by the keyword the handler takes), how to show its result,
+# and whether a job that runs again may start it over (retryable). A scenario that submits work
 # to the provider, or does something that cannot be undone, is not retryable:
 # starting over would submit the work twice or do it again.
 #
@@ -52,12 +53,63 @@
 - key: citations
   name: Citations
   summary: 規約や契約のように、回答の根拠を読み手が検証する必要がある
+  useful_cases: |-
+    規約、契約、マニュアルのように、回答の根拠を読み手が確かめる必要がある場合に役立つ。`with_citations` を付けて、文書を `ask` の `with:` で添付すると、応答の `citations` に、回答のどの範囲（`text`、`start_index`、`end_index`）が文書のどの引用（`cited_text`）に基づくかが載る。PDF なら、引用のページ（`start_page`、`end_page`。1 始まりで、両端を含む）も載る。このデモでは、回答の該当する範囲の末尾に番号の印を入れ、出典の一覧から PDF のそのページを開けるようにしている。
+
+    文書の引用に対応するのは、Anthropic、Cohere、Bedrock（Converse）上の Claude である。Anthropic は、文書を文の単位に分け、その単位で引用する。PDF は本文を取り出して引用するので、本文を取り出せないスキャンだけの PDF と、画像は引用できない。
+
+    引用は API が文書から取り出すので、指し先は必ず文書の中にある。ただし、その引用が主張を支えているかどうかは、読み手が判断する。
+
+    `cited_text` は出力トークンに数えられない。一方、コストには文書のトークンが含まれる。PDF の各ページは、本文（1 ページあたり 1,500〜3,000 トークン）と画像の両方として処理され、両方が課金される。Anthropic では、文書の引用と `with_schema` を併用できない。
+
+    Rails では、出典はメッセージの記録の `citations` の列に残る。このアプリの Sentry には、問い合わせ文と回答の本文が載り、添付した文書と出典は載らない。出典は実行の画面で読む。
+  without_it: |-
+    プロンプトで「根拠を引用して」と頼む方法では、引用が文書に実在するかを照合する仕組みを自分で作ることになる。モデルが引用を書き換えたり作ったりしても、それを検出する仕組みがない。引用の文字数の分だけ、出力トークンもかかる。
+
+    ページや位置を知るには、文書を自分で分割して番号を付けて渡し、番号を返させる形式を決めて解析することになる。回答のどの文がどの引用に基づくかの対応づけも、出力の形式を決めて解析することになる。
   sources:
-    - title: Citations（RubyLLM）
+    - title: Citations（RubyLLM）— Citing Your Documents、The Citation Object、ActiveRecord Integration
       url: https://rubyllm.com/citations/
+    - title: What's New in 2.0（RubyLLM）— Citations
+      url: https://rubyllm.com/whats-new-in-2-0/#citations
+    - title: Citations（Anthropic）— 文書の種類、ページ番号、トークン
+      url: https://platform.claude.com/docs/en/build-with-claude/citations
+    - title: PDF support（Anthropic）— 上限と処理
+      url: https://platform.claude.com/docs/en/build-with-claude/pdf-support
   scenarios:
     - key: cite_return_policy
       name: 返品ポリシーに基づいて回答する
+      handler: Citations::AnswerFromReturnPolicy
+      providers: [anthropic]
+      # A model the registry lists with citations and with PDF input, the
+      # stronger one for quotes from a Japanese document, as cost is not
+      # capped. Should claude-sonnet-5 be refused, use the dated
+      # claude-haiku-4-5-20251001: the registry lists the alias
+      # claude-haiku-4-5 without citations, and RubyLLM then only warns.
+      models:
+        model: claude-sonnet-5
+      inputs:
+        - name: inquiry
+          label: 顧客からの問い合わせ文
+          required: true
+          # Asks about all three pages of the policy: whether and at whose
+          # cost (page 1), the replacement filter (page 2), the refund (page 3).
+          default: |-
+            2 週間前に届いた空気清浄機（注文番号 E-50712）を、まだ開封していませんが、部屋に合わないので返品したいです。返品できますか。返送の送料はどちらの負担になりますか。返金はいつ、どのような方法で受けられますか。また、同じ箱で届いた交換用のフィルター（未開封）も一緒に返品できますか。
+      # A PDF, because its pages are what a citation of a PDF adds: RubyLLM
+      # reads no position from a citation of a text document. A fixed one,
+      # made once from its HTML, so that no PDF gem or font comes into the
+      # app and the code shown stays RubyLLM's, and so that its pages and
+      # quotes stay the same from run to run. Remaking it leaves the sources
+      # of earlier runs pointing at pages that have changed.
+      documents:
+        - name: policy
+          label: 返品ポリシー文書（PDF、3 ページ）
+          path: documents/return-policy.pdf
+      result_kind: cited_answer
+      # Starting over asks again, and is billed again, but leaves nothing
+      # half done.
+      retryable: true
 
 - key: tool-approval
   name: Tool Approval
@@ -168,12 +220,46 @@
 - key: model-fallbacks
   name: Model Fallbacks
   summary: プロバイダーの障害やレート制限が起きても、応答を続けたい
+  useful_cases: |-
+    プロバイダーの障害やレート制限が起きても、応答を続けたい場合に役立つ。`with_fallbacks` に予備モデルを順に渡すと、生成がレート制限、サーバー側のエラー、サービス停止、過負荷、タイムアウト、接続の失敗で失敗したときに、次のモデルで同じ会話を送り直す。予備モデルは別のプロバイダーのモデルでもよい。会話の履歴、指示文、ツール、スキーマは予備モデルに引き継がれるので、予備モデルがそれらに対応している必要がある。
+
+    認証の失敗、不正なリクエスト、入力の上限超過、モデル名の誤りでは切り替わらない。切り替えの対象にする例外は `on:` で選べる。切り替えの前には、同じモデルへのリトライ（`max_retries`、既定 3 回）が先に尽きる。レート制限でプロバイダーが示す待ち時間（Retry-After）が `retry_max_interval` を超えると、待たずに失敗し、すぐ切り替わる。切り替えはその 1 回の生成だけに効き、次の問い合わせは主モデルに戻る。
+
+    `before_fallback` で、切り替え元（`from`）、切り替え先（`to`）、きっかけの例外（`error`）、試行番号（`attempt`）を読める。`after_fallback` では、それらに加えて成否（`succeeded?` と `fallback_error`）を読める。使用量とコストは失敗した試行を含めて集計される。使用量の分からない失敗（サーバー側のエラーやタイムアウト）が含まれると、合計のコストは `nil` になる。計装イベント `usage.ruby_llm` は、試行ごとに 1 回ずつ出る。
+
+    このデモでは、主モデル（OpenAI）の送信先を、文脈（`RubyLLM.context`）で到達できないホストに向けて障害を再現している。文脈はアプリ全体の設定の複製なので、予備モデル（Anthropic）にはいつもどおり送られ、ほかのデモにも影響しない。Sentry のトレースには、主モデルの失敗した試行（初回とリトライ 3 回の計 4 回）と、予備モデルの成功した試行が並ぶ。ただし、失敗した試行 1 回ずつの所要時間は分からない。試行のイベントは瞬間の記録で、リトライは 1 回の送信（`POST responses`）の内側で起きるためである。分かるのは 4 回をまとめた所要時間で、2026-09-23 に確かめたときは約 0.8 秒だった。主モデルへの送信は OpenAI に届かないので、課金は起きない。このデモの実行が失敗として記録されるのは、予備モデルも失敗したときである。そのとき失敗の表示のプロバイダーの欄には両方のプロバイダー名が出るが、記録されるのは予備モデル（Anthropic）の失敗である。
+  without_it: |-
+    予備モデルに切り替えるには、例外を rescue して別のモデルの会話を組み立て直し、履歴、指示文、添付を相手のプロバイダーの形で送り直す処理を、自分で書いて保守することになる。
+
+    リトライと切り替えの順序、ストリーミングの途中で失敗したときの扱い、試行ごとの使用量とコストの集計、切り替えの後に元のモデルへ戻す処理も、自分で決めて書くことになる。
   sources:
-    - title: Error Handling（RubyLLM）
-      url: https://rubyllm.com/error-handling/
+    - title: Error Handling（RubyLLM）— Model Fallbacks、Fallback Callbacks、Automatic Retries
+      url: https://rubyllm.com/error-handling/#model-fallbacks
+    - title: What's New in 2.0（RubyLLM）— Model Fallbacks
+      url: https://rubyllm.com/whats-new-in-2-0/#model-fallbacks
+    - title: "Connection, Logging and Contexts（RubyLLM）— Timeouts & Retries（Retry-After と retry_max_interval）、Contexts: Isolated Configurations（送信先の上書き）"
+      url: https://rubyllm.com/configuration-connection/#timeouts--retries
+    - title: Instrumentation and Observability（RubyLLM）— Usage Events（試行ごとのイベント）
+      url: https://rubyllm.com/instrumentation/#usage-events
   scenarios:
     - key: fall_back_to_another_provider
       name: 主モデルが応答できないときに予備モデルで回答する
+      handler: ModelFallbacks::AnswerWithFallback
+      providers: [openai, anthropic]
+      # The fallback is given as a model id. The registry resolves it to
+      # Anthropic, the first provider in its order that offers it.
+      models:
+        model: gpt-5-nano
+        fallback_model: claude-haiku-4-5
+      inputs:
+        - name: inquiry
+          label: 顧客からの問い合わせ文
+          required: true
+          default: |-
+            一昨日注文したコードレス掃除機（注文番号 E-61294）の配送予定日を知りたいです。受け取れない日があるので、配送日時を指定し直すことはできますか。
+      result_kind: fallback_answer
+      # Starting over asks once more, and pays for that one answer again.
+      retryable: true
 
 - key: video-and-speech
   name: Video and Speech Generation
@@ -189,11 +275,21 @@
 
     OpenAI の利用規約は、AI が生成した音声であることを聞き手に明示するよう求めている。
 
-    動画の生成（`RubyLLM.animate`）の説明は、商品の紹介動画の代表シナリオとあわせて用意する。
+    商品の説明文から、短い紹介動画を用意したい場合にも役立つ。動画の生成は、どのプロバイダーでも、投入してから完成を待つ非同期の処理である。`RubyLLM.animate` は完成まで待って `RubyLLM::Video` を返す。`RubyLLM.animate_later` は投入だけを行い、`RubyLLM::VideoJob` をすぐ返す。`refresh` で状態を問い合わせ、`wait` で完成まで待ち、`video` で動画を受け取る。待ち時間の上限（既定は 600 秒）と問い合わせの間隔（既定は 5 秒）は、設定の `video_generation_timeout` と `video_generation_poll_interval`、または `wait` の引数で変えられる。
+
+    xAI の文書では、完成まで典型的には最大で数分かかる。このデモは、`animate_later` が返した `VideoJob` の `id` を実行の記録に控えてから、同じジョブの中で `wait` する。アプリの停止でジョブが戻されても、控えた ID から待ち直し、動画を生成し直さない。ただし RubyLLM 2.0.0 には、ID から `VideoJob` を開き直す公開の API がない（`Batch` と `ResearchJob` にはある `find` が、`VideoJob` にはない）。このデモは、RubyLLM が内部で行う組み立てを 1 つのメソッドで再現している。gem のバージョンを固定しているので成り立つ。
+
+    xAI は、完成した動画を一時的な URL で返す。`Video#to_blob` がその URL からダウンロードし、`save` はファイルに書く。URL の有効期間は文書に書かれていないので、残すならすぐにダウンロードする。このデモは、実行の成功を記録するときにダウンロードして添付している。
+
+    xAI では、`provider_options:` で秒数（`duration`。1〜15 秒）、縦横比（`aspect_ratio`。既定は `16:9`）、解像度（`resolution`。既定は `480p`）、音声の有無（`generate_audio`。既定は付ける）を指定できる。料金は秒数と解像度で決まり、`grok-imagine-video-1.5` は 480p が 1 秒 0.08 ドル、720p が 0.14 ドル、1080p が 0.25 ドルである。このデモの 6 秒・480p の動画は 0.48 ドルになる。
+
+    計装イベントは、投入の `video_job.ruby_llm` と、投入と状態の問い合わせの `request.ruby_llm` である。`video.ruby_llm` は `animate` を使ったときだけ発行され、ダウンロードは計装されない。xAI は状態の応答の `usage.cost_in_usd_ticks` に費用を返す（1 ティックは 100 億分の 1 ドル。このデモの動画では 4,800,000,000、つまり 0.48 ドルだった。2026-09-23 に実際の API で確かめた）。ただし RubyLLM 2.0.0 の `Video` はこれを読まず、RubyLLM のモデルの登録簿にも xAI の動画の単価がない。そのため RubyLLM のコストは不明になり、このアプリも Sentry にコストを送らない。費用が要るときは、`video.raw` の `usage` から読む。
   without_it: |-
     プロバイダーの音声の API を直接呼ぶと、エンドポイント、パラメーターの名前（声、形式）、バイナリの応答の受け取り、ストリーミング、エラーの変換を、自分で書いて保守することになる。
 
     プロバイダーを替える（ElevenLabs、Gemini、Deepgram など）と、要求と応答の形が変わり、書き直しになる。たとえば ElevenLabs は声を名前ではなく ID で指定し、Gemini は生の PCM を返す。RubyLLM では、`model:` を替えるだけで同じ `RubyLLM::Speech` が返り、形式は `speech.format` と `speech.mime_type` で分かる。
+
+    動画の API を直接呼ぶと、投入、状態の問い合わせの繰り返し、状態の判定（xAI では `pending`、`done`、`failed`、`expired`）、ダウンロードを自分で書くことになる。処理の ID の形、状態の名前、応答の形はプロバイダーごとに違う。RubyLLM は、状態を `VideoJob` の `status`（`:pending`、`:completed`、`:failed`）にそろえる。
   sources:
     - title: Text to Speech（RubyLLM）— Basic Speech Generation、Voices、Formats、Style
       url: https://rubyllm.com/text-to-speech/
@@ -205,6 +301,12 @@
       url: https://developers.openai.com/api/docs/guides/text-to-speech
     - title: Create speech（OpenAI）— 入力の上限とパラメーター
       url: https://developers.openai.com/api/reference/resources/audio/subresources/speech/methods/create
+    - title: Video Generation（xAI）— エンドポイント、パラメーター、状態、一時的な URL、エラー
+      url: https://docs.x.ai/developers/model-capabilities/video/generation
+    - title: Imagine Overview（xAI）— 非同期の流れ、秒数と解像度による料金
+      url: https://docs.x.ai/developers/model-capabilities/imagine
+    - title: grok-imagine-video-1.5（xAI）— 解像度ごとの料金
+      url: https://docs.x.ai/developers/models/grok-imagine-video-1.5
   scenarios:
     - key: speak_answer
       name: 回答文を読み上げる
@@ -228,6 +330,23 @@
       retryable: true
     - key: generate_product_video
       name: 商品の紹介動画を生成する
+      handler: VideoAndSpeech::GenerateProductVideo
+      providers: [xai]
+      models:
+        model: grok-imagine-video-1.5
+      # Only the description is an input. The length, resolution, and aspect
+      # ratio are fixed in the handler, where the code shows how to choose
+      # them, and where they keep the cost of a run known.
+      inputs:
+        - name: description
+          label: 商品の説明文
+          required: true
+          default: |-
+            ステンレス製の電気ケトル「ソラ」。容量は 1.0 リットルで、マットな白の本体に木目調の取っ手が付いています。注ぎ口が細く、ハンドドリップのコーヒーにも使えます。沸騰すると自動で電源が切れます。
+      result_kind: product_video
+      # Starting over would generate the video, and pay for it, again. A job
+      # that runs again waits for the video by the id the run keeps.
+      retryable: false
 
 - key: provider-tools
   name: Provider Tools
@@ -240,18 +359,34 @@
     行われた検索は、応答の `server_tool_calls` で読める。OpenAI では 1 件ごとに、検索した語句や開いたページの URL を持つ。出典は `citations` で読める。URL、題名、回答の該当する範囲を持ち、文書の引用と同じ `Citation` のオブジェクトである。OpenAI の注釈が指す「回答の該当する範囲」は、主張の文ではなく、モデルが回答の中に書いた出典のリンクの部分である。Rails では、メッセージの記録の `server_tool_calls` と `citations` の列に残る。
 
     課金は、検索の回数（OpenAI では 1,000 回あたり 10 ドル）と、検索結果のトークン（モデルの入力の単価）である。RubyLLM が求めるコストはトークンの単価だけによるもので、検索の回数の課金を含まない。そのため、Sentry に載るコストは実際より小さい。このアプリで確かめた既定の質問の応答では、検索 6 回の課金 0.06 ドルに対し、RubyLLM が求めたコストは約 0.006 ドルだった。検索の回数は、応答の本体の `tool_usage`（文書には載っていない）の `num_requests` に載る。その応答では、`server_tool_calls` のうち操作の種類が `search` のものの件数と一致し、ページを開く操作（`open_page`）は数えられていなかった。また OpenAI は、`gpt-5` で推論の強さを `minimal` にすると Web 検索を使えないとしている。
+
+    コードを実行する隔離環境を自前で構築、運用したくない場合にも役立つ。`with_provider_tools(:code_execution)` は、OpenAI では `code_interpreter`（コンテナは `auto`）になる。モデルが Python のコードを書いてプロバイダーのコンテナで実行し、その出力を読んで回答する。アプリは問い合わせを 1 回送るだけで、コードを実行する場所もツールも持たない。
+
+    実行されたコードは、`server_tool_calls` の `input` で読める。コードの出力は、RubyLLM の既定の要求では返らない。`with_provider_options` で `include` に `code_interpreter_call.outputs` を足すと、`result` に入る。`with_provider_options` の値は RubyLLM の既定値を置き換えるので、既定の `reasoning.encrypted_content` も並べて書く。実行の状態（`status`）とコンテナの ID（`container_id`）は RubyLLM が正規化しないので、`raw` で読む。コードが作ったファイルは `citations` の注釈になるだけで、OpenAI では `attachments` に入らない。
+
+    プロバイダー側のツールだけを使う会話では、`with_tool_options` はツールの使用を強制しない（RubyLLM 2.0.0 のソースで確かめた。公式のガイドには書かれていない）。強制するには、`tool_choice` を `with_provider_options` でプロバイダーの語彙のまま渡す。このアプリで確かめたところ、指示文で頼むだけでは、2 回のうち 1 回はコードを実行せずに回答した。
+
+    コード実行の課金は、コンテナとトークンである。コンテナは定価で、1 GB のコンテナの 20 分のセッションあたり 0.03 ドルである（料金の文書は、対象のセッションを分単位で最低 5 分として課金するとも書く）。RubyLLM が求めるコストはトークンの単価だけによるもので、コンテナの課金を含まない。そのため、Sentry に載るコストは実際より小さい。このアプリで確かめた既定の入力の応答（3 回）では、RubyLLM が求めたコストは約 0.0009〜0.0012 ドルで、コンテナの定価 0.03 ドルの 30 分の 1 前後だった。コンテナの回数は応答の本体に載らない。各ステップの `container_id` で、使われたコンテナを区別できる。
   without_it: |-
     検索エンジンの API を選んで契約し、自前のツールとして関数を書くことになる。検索結果の取得、ページの本文の取り出し、要約、回答の文と出典の対応づけを、自分で実装して保守する。
 
     モデルは検索の語句を決めるだけで、検索と閲覧の往復のたびに、ツールの呼び出しと結果の受け渡しが要る。往復の回数だけ、問い合わせが増える。
+
+    コードを実行させるには、モデルが書いたコードを安全に実行する隔離環境（コンテナやサンドボックス）を用意し、実行時間、メモリ、ネットワークの制限と、環境の破棄を自分で運用することになる。コードを受け取って実行し、出力をモデルに返す往復も、自前のツールとして書く。
   sources:
     - title: Provider Tools（RubyLLM）— Enabling Provider Tools、Tool Options、Reading Results
       url: https://rubyllm.com/provider-tools/
     - title: What's New in 2.0（RubyLLM）— Provider Tools
       url: https://rubyllm.com/whats-new-in-2-0/#provider-tools
+    - title: Advanced Request Control（RubyLLM）— Provider Options（with_provider_options が RubyLLM の既定値を上書きすること）
+      url: https://rubyllm.com/chat-request-control/#provider-options
     - title: Web search（OpenAI）— 出力の項目と注釈、対応するモデルと推論の強さ
       url: https://developers.openai.com/api/docs/guides/tools-web-search
-    - title: Pricing（OpenAI）— Built-in tools（Web 検索の課金）
+    - title: Code Interpreter（OpenAI）— コンテナの auto と再利用、既定の 1 GB、失効、ファイルの引用、tool_choice を required にする例
+      url: https://developers.openai.com/api/docs/guides/tools-code-interpreter
+    - title: Create a model response（OpenAI）— include の値、tool_choice、出力の項目 code_interpreter_call
+      url: https://developers.openai.com/api/reference/resources/responses/methods/create
+    - title: Pricing（OpenAI）— Built-in tools（Web 検索とコンテナの課金）
       url: https://developers.openai.com/api/docs/pricing#built-in-tools
   scenarios:
     - key: search_web
@@ -274,17 +409,89 @@
       retryable: true
     - key: run_code
       name: 注文データを集計するコードを実行する
+      handler: ProviderTools::AnswerWithCodeExecution
+      providers: [openai]
+      # A model that can run code. RubyLLM sends it through the Responses
+      # API, where :code_execution becomes OpenAI's code_interpreter tool in a
+      # container that OpenAI creates, or reuses while it is still active.
+      models:
+        model: gpt-5-nano
+      inputs:
+        - name: orders
+          label: 注文データ（CSV）
+          required: true
+          default: |-
+            注文番号,注文日,カテゴリ,商品,金額,状態
+            E-50101,2026-09-01,キッチン家電,電気ケトル,4980,支払い済み
+            E-50102,2026-09-02,生活家電,コードレス掃除機,19800,支払い済み
+            E-50103,2026-09-03,日用品,食器用洗剤（詰め替え）,398,支払い済み
+            E-50104,2026-09-05,キッチン家電,コーヒーメーカー,7980,返金済み
+            E-50105,2026-09-08,日用品,キッチンペーパー（6 ロール）,598,支払い済み
+            E-50106,2026-09-10,生活家電,加湿器,8980,支払い済み
+            E-50107,2026-09-12,キッチン家電,トースター,6480,支払い済み
+            E-50108,2026-09-15,生活家電,電気毛布,3980,返金済み
+        - name: request
+          label: 集計の依頼
+          required: true
+          default: |-
+            この注文データから、次の 3 つを求めてください。
+            - カテゴリごとの売上金額の合計（返金済みの注文を除く）
+            - 返金済みの注文の件数と金額の合計
+            - 全体の平均注文金額（返金済みの注文を除く）
+      result_kind: code_execution_answer
+      # Starting over runs the code again, in a container created again, and
+      # is billed again, but leaves nothing half done.
+      retryable: true
 
 - key: deep-research
   name: Deep Research
   official_name: Hosted Research
   summary: 数分以上の待ち時間を許容して、複数の情報源にあたった調査レポートを得たい
+  useful_cases: |-
+    複数の情報源にあたる調査を、検索、ページの取得、調査の計画、レポートの執筆まで含めてプロバイダーのエージェントに任せ、数分以上の待ち時間を許容してレポートを得たい場合に役立つ。
+
+    `RubyLLM.research_later` は調査を投入するだけで、`id` を持つジョブをすぐに返す。ID を自分の記録に保存しておけば、別のプロセスから `RubyLLM::ResearchJob.find(id, provider: :vertexai)` で読み込み、`refresh` か `wait` で完了を待てる。RubyLLM は調査の記録のテーブルを用意しないので、ID の保存はアプリの役目になる。
+
+    レポートはチャットの応答と同じ `RubyLLM::Message` で、`content`、`citations`、`thinking`、`server_tool_calls` を持つ。ただし、途中の手順、思考の要約、出典の URL は省かれることがある。`job.tokens` でトークン数が分かる（出力は思考を含む）。プロバイダーが金額を返さず、エージェントには単価がないため、コスト（`job.cost.total`）は不明になる。`report.model` は `nil` で、エージェントはモデルではない。出力の予算などで途中で打ち切られたレポートは、`job.incomplete?` と `finish_reason` の `:max_tokens` で分かる。失敗と取り消しは `message` を読むと例外になり、状態と理由はジョブに残る。
+
+    ブロッキングの `RubyLLM.research` は、待ちの途中の例外や中断で取り消しを試みる。このアプリは投入と待ちを分け、取り消しを試みない。
+
+    組み込みで対応するプロバイダーは 2.0.0 では Vertex AI だけである（OpenAI と Azure は、Responses のバックグラウンドモードで長い調査は走るが、取得、ポーリング、取り消しの仕組みがない）。Vertex AI の Deep Research エージェント（`deep-research-preview-04-2026`）は Preview で、ロケーションは `global` に限られる。ツールを指定しなければ Google 検索と URL コンテキスト（ページの取得）を使う。完了まで数分かかり、実行時間の上限は 120 分である。課金はトークンとツールの実行（検索とグラウンディング）の合算で、プロンプトと生成物はプロバイダー側に 7 日間保存される。
+
+    このアプリは、投入の直後にジョブ ID を実行に控え、同じジョブの中で状態を取得して完了を待つ（間隔と上限はコード断片の定数にある）。アプリの停止でジョブが待ち行列に戻されても、次のジョブは控えた ID から続きを待ち、調査をもう一度投入しない。状態の取得が続けられる種類の失敗（ネットワーク、障害、レート制限、認証情報の失効など）になったときは、実行中のまま 1 分後にやり直す。コンソールから `RubyLLM::ResearchJob.find(id, provider: :vertexai).cancel` で取り消すと、実行は「取り消し」になる。
+
+    Sentry のトレースには、投入（プロンプト、エージェント、ジョブ ID を持つ `research_job` のスパン）と状態の取得のリクエストだけが載る。投入と待ちはチャットのイベントを発行しないため、レポートの本文、トークン数、コストはトレースに載らず、実行の画面で読む。
+  without_it: |-
+    検索のツール、ページの取得のツール、調査の計画と繰り返しのループ、出典の追跡、長時間の実行の中断と再開を、自分で書いて保守することになる。
+
+    Vertex AI の Interactions API を直接呼ぶ場合は、投入、状態の取得、応答の手順（`steps`）からのレポート、出典、思考、使用量の読み取りと、エラーの変換を自分で書く。RubyLLM では、レポートがチャットと同じ `Message` と `Citation` になり、ジョブ ID からの復元と取り消しが用意されている。
   sources:
     - title: Hosted Research（RubyLLM）
       url: https://rubyllm.com/hosted-research/
+    - title: What's New in 2.0（RubyLLM）— Hosted Research
+      url: https://rubyllm.com/whats-new-in-2-0/#hosted-research
+    - title: Use the Gemini Deep Research Agent（Google Cloud）
+      url: https://docs.cloud.google.com/gemini-enterprise-agent-platform/agents/use-deep-research
+    - title: Provider API Coverage（RubyLLM）— Asynchronous research
+      url: https://rubyllm.com/provider-coverage/
   scenarios:
     - key: research_topic
       name: 調査テーマのレポートを作る
+      handler: DeepResearch::ResearchTopic
+      providers: [vertexai]
+      # No models: the agent is not a model of RubyLLM's registry, and the
+      # handler keeps its ID.
+      inputs:
+        - name: topic
+          label: 調査テーマ
+          required: true
+          default: |-
+            家電と日用品を扱う EC サイトのサポートデスクで、返品と交換の案内文を見直しています。
+            日本の通信販売における返品・キャンセルに関する法制度（特定商取引法の返品特約の表示、クーリング・オフの適用の有無など）と、消費者庁や国民生活センターなどの公的機関の指針を整理してください。
+            案内文に反映すべき点を挙げ、各点に出典を付けてください。
+      result_kind: research_report
+      # Starting over would submit another research and pay for it again.
+      retryable: false
 
 - key: tokenization
   name: Tokenization and Token Counting
@@ -299,10 +506,20 @@
     計数は、出力の長さも、課金される使用量も示さない。送信後の使用量は、応答の `tokens` と `cost` で読む。プロバイダー側のツール、`provider_options`、compaction、`before_request` による変更は数えられないので、それらを使う会話では、実際に送る入力と数がずれることがある。計数は使用量を記録せず、chat の計装イベントも発行しない。このアプリの Sentry のトレースには計数のリクエストだけが載り、トークン数とコストは載らない。数えた結果は実行の画面で読む。
 
     会話の計数（`count_tokens`）とテキストの分割（`RubyLLM.tokenize`）は、プロバイダーの別のエンドポイントを使う。会話を数えられるのは OpenAI、Anthropic、Gemini、Bedrock、Vertex AI（Gemini のモデルに限る。Vertex AI 上の Claude では数えられない）である。xAI、Cohere、GPUStack はテキストの分割にだけ対応する。公式の Provider API Coverage の表は 2 つを「Token counting」の 1 行にまとめているため、xAI でも会話を数えられるように見える。対応しないプロバイダーでは `RubyLLM::Error` になる。
+
+    テキストの分割は、テキストがどのトークンに割れるか（日本語の語の区切り、数字と記号の扱い）を、モデルのトークナイザーそのもので確かめたい場合に役立つ。`RubyLLM.tokenize(text, model:, provider:)` は `RubyLLM::Tokenization` を返す。`ids` はトークン ID の配列（テキストの順）、`count` はその数である。`raw` には xAI が返した応答がそのまま入り、トークンごとの文字列（`string_token`）とバイト列（`token_bytes`）が読める。
+
+    分割は渡した文字列だけを対象にし、指示文、ツール、添付、会話の整形を含まない。課金される使用量も示さない。トークン ID はモデルごとに違うので、比べるときは同じモデルを使う。計装イベント `tokenization.ruby_llm` はテキストを含まないので、このアプリの Sentry のトレースには分割のスパンとトークン数、xAI へのリクエストだけが載る。トークンの列は実行の画面で読む。
+
+    絵文字のような 4 バイトの文字は、文字の途中で割れることがある。途中で割れたトークンは文字列が空になるので、バイト列で読む。すべてのトークンのバイト列をつなぐと元のテキストに戻るが、文字列をつないでも戻らない。これは xAI の文書には書かれておらず、このアプリで実際の API（`grok-4.3`）を呼んで確かめた事実である（2026-09-23）。既定の入力の末尾の「🙏」も、文字列が空の 2 つのトークンに割れる。
+
+    このデモは `provider: :xai` を渡している。RubyLLM 2.0.0 では、`provider:` を渡さずに `grok-4.3` を指定すると、モデルの登録簿の別名（Vertex AI 用の `xai/grok-4.3`）とプロバイダーの優先順位により Perplexity のモデルに解決される。そのため、xAI の設定値があっても Perplexity の設定値が足りないという `RubyLLM::ConfigurationError` になる。公式ガイドの例は `provider:` を省いているが、2.0.0 ではその呼び方は失敗する。
   without_it: |-
     ローカルのトークナイザー（tiktoken など）で見積もると、指示文やメッセージの区切りの整形、ツール定義、画像、モデルごとの違いを自分で再現する必要があり、プロバイダーが数える値とずれる。
 
     送ってみて、上限超過のエラー（`RubyLLM::ContextLengthExceededError`）で知る方法では、送ってからでないと分からない。上限に近い入力を、送る前に切り詰める判断ができない。
+
+    テキストがどのトークンに割れるかを知るには、モデルの語彙に合うトークナイザーを手元に用意して保守することになる。モデルを変えると分割も変わるので、そのたびに追随が要る。文字数から見積もる方法では、日本語の 1 文字が 1 トークンにも、2 文字が 1 トークンにもなる（このアプリで確かめた）ため、どこで割れるかも、上限に近い入力をどこで切り詰めればよいかも分からない。
   sources:
     - title: Tokenization（RubyLLM）— Counting a Chat Request と Token Counts and Usage
       url: https://rubyllm.com/tokenization/#counting-a-chat-request
@@ -312,6 +529,10 @@
       url: https://developers.openai.com/api/docs/guides/token-counting
     - title: Get input token counts（OpenAI）
       url: https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens/methods/count
+    - title: Tokenization（RubyLLM）— Tokenizing Text
+      url: https://rubyllm.com/tokenization/#tokenizing-text
+    - title: Tokenize text（xAI）— 要求と応答の項目（トークンの ID、文字列、バイト列）
+      url: https://docs.x.ai/developers/rest-api-reference/inference/other#tokenize-text
   scenarios:
     - key: count_tokens
       name: 送信前に入力のトークン数を数える
@@ -345,6 +566,24 @@
       retryable: true
     - key: tokenize_text
       name: テキストのトークンへの分割を見る
+      handler: Tokenization::TokenizeText
+      providers: [xai]
+      # The model bin/check_keys and the RubyLLM guide use. The handler names
+      # xAI as the provider, since the id alone resolves to another one.
+      models:
+        model: grok-4.3
+      inputs:
+        - name: text
+          label: 分割を確認するテキスト
+          required: true
+          # The inquiry of count_tokens, closed with a four-byte emoji that
+          # xAI splits partway, so that the default run shows tokens with an
+          # empty string.
+          default: |-
+            3 週間前に届いた電気ケトル（注文番号 D-40518）を開封して使ってみましたが、思っていたより音が大きいので返品したいです。返品できますか。返送の送料はどちらの負担になりますか。よろしくお願いします🙏
+      result_kind: tokenization
+      # Tokenizing changes nothing, so starting over only tokenizes again.
+      retryable: true
 
 - key: workflow-instrumentation
   name: Workflow Instrumentation

@@ -1,0 +1,30 @@
+<%# The video is the run's attachment that the result's reference names; the rest comes from the result. %>
+<% result = run.result %>
+<% reference = result["video"] || {} %>
+<% file = run.generated_files.find { |attachment| attachment.filename.to_s == reference["filename"] } %>
+<section data-product-video class="max-w-prose space-y-4">
+  <% if file %>
+    <video controls preload="metadata" src="<%= rails_blob_path(file, only_path: true) %>" class="w-full rounded-md bg-gray-900"></video>
+  <% else %>
+    <p data-video-missing class="text-sm text-gray-500">動画が見つからない</p>
+  <% end %>
+
+  <p class="text-sm text-gray-600">この動画は AI が生成したものである。</p>
+
+  <% if file %>
+    <%= link_to "動画を保存する", rails_blob_path(file, disposition: "attachment", only_path: true), class: "btn-secondary" %>
+  <% end %>
+
+  <dl class="grid grid-cols-[auto_1fr] gap-x-6 gap-y-1 text-sm">
+    <dt class="text-gray-500">モデル</dt>
+    <dd class="text-gray-800"><%= result["model"] %></dd>
+    <dt class="text-gray-500">長さ</dt>
+    <dd class="text-gray-800"><%= result["duration"] ? "#{result["duration"]} 秒" : "—" %></dd>
+    <dt class="text-gray-500">解像度</dt>
+    <dd class="text-gray-800"><%= result["resolution"] %></dd>
+    <dt class="text-gray-500">縦横比</dt>
+    <dd class="text-gray-800"><%= result["aspect_ratio"] %></dd>
+    <dt class="text-gray-500">動画の大きさ</dt>
+    <dd class="text-gray-800"><%= number_to_human_size(reference["byte_size"]) %></dd>
+  </dl>
+</section>

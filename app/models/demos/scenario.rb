@@ -2,9 +2,27 @@ module Demos
   # A representative scenario of a demo: one case where the feature helps,
   # runnable against a real provider once it has a handler.
   class Scenario < Data.define(
-    :key, :demo_key, :name, :providers, :models, :inputs, :handler_name, :result_kind, :retryable
+    :key, :demo_key, :name, :providers, :models, :inputs, :documents, :handler_name, :result_kind, :retryable
   )
     Input = Data.define(:name, :label, :default, :required)
+
+    # A file the scenario hands its handler, such as a policy to cite. It is
+    # kept under public/, path relative to it, so that a page can link to
+    # the very file the handler is given.
+    Document = Data.define(:name, :label, :path) do
+      # public/ is served from the root.
+      def url
+        "/" + path.split("/").map { |segment| ERB::Util.url_encode(segment) }.join("/")
+      end
+
+      def absolute_path
+        Rails.public_path.join(path)
+      end
+
+      def filename
+        File.basename(path)
+      end
+    end
 
     # :runnable, :missing_config (with the providers that lack settings), or
     # :preparing (no handler yet).
@@ -68,10 +86,12 @@ module Demos
       File.read(Rails.root.join(source_path))
     end
 
-    # Calls the handler with each input and each model as a keyword, so the
-    # handler reads like ordinary RubyLLM code with nothing of this app in it.
+    # Calls the handler with each input, each model, and the path of each
+    # document as a keyword, so the handler reads like ordinary RubyLLM code
+    # with nothing of this app in it: it passes a path on without knowing
+    # where the file lives.
     def perform(input)
-      handler.perform(**input_values(input).symbolize_keys, **models.symbolize_keys)
+      handler.perform(**input_values(input).symbolize_keys, **models.symbolize_keys, **document_paths)
     end
 
     # Records a person's decision on a tool call of the run's chat. Only a
@@ -80,21 +100,30 @@ module Demos
       handler.decide(chat, tool_call_id, approved:)
     end
 
-    # Continues the run's chat after a decision, or collects the work the
-    # run left with the provider once that work has ended: the handler is
-    # given the chat, or the id of the work. Returns as perform does.
-    def resume(chat_or_remote_job)
-      if chat_or_remote_job.is_a?(Hash)
-        handler.resume(chat_or_remote_job.fetch("id"))
-      else
-        handler.resume(chat_or_remote_job)
-      end
+    # Continues the run's chat after a decision. Returns as perform does.
+    def resume(chat)
+      handler.resume(chat)
     end
 
-    # Asks the handler how the work the run left with the provider is doing.
-    # Only a handler that leaves work with a provider has this.
-    def check(remote_job)
-      remote_state(handler.check(remote_job.fetch("id")))
+    # Whether the work the handler leaves with the provider is checked on
+    # by the job until it ends, as a batch is, rather than waited for.
+    def checks_remote_job?
+      handler.respond_to?(:check)
+    end
+
+    # Asks the handler how the work the run left with the provider is doing,
+    # given the id the run keeps. Only a handler that checks on its work
+    # has this.
+    def check_remote_job(id)
+      remote_state(handler.check(id))
+    end
+
+    # Collects the work the run left with the provider once it has ended,
+    # given the id the run keeps. Returns as perform does. Only a handler
+    # that checks on its work has this: one that waits for its work takes
+    # the models as well, in resume_remote_job.
+    def collect_remote_job(id)
+      handler.resume(id)
     end
 
     # Reads the work a handler left with a provider, as RubyLLM returned it.
@@ -113,6 +142,14 @@ module Demos
       end
     end
 
+    # Waits for the work the handler left with the provider, given the id
+    # the run keeps, with each model as a keyword as perform has them.
+    # Returns as perform does. Only a handler that leaves work with the
+    # provider has this.
+    def resume_remote_job(id)
+      handler.resume(id, **models.symbolize_keys)
+    end
+
     private
 
     # OpenAI's expired batch reads as failed: it ended without finishing.
@@ -122,6 +159,10 @@ module Demos
       return :cancelled if batch.cancelled?
 
       :failed
+    end
+
+    def document_paths
+      documents.to_h { |document| [ document.name.to_sym, document.absolute_path ] }
     end
 
     # Only the names of the required settings are public in RubyLLM 2.0.0;
