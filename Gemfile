@@ -48,7 +48,7 @@ gem "googleauth", "~> 1.15"
 
 # Error monitoring, and the OTLP bridge that ships OpenTelemetry traces to Sentry [https://docs.sentry.io/platforms/ruby/guides/rails/integrations/otlp/]
 gem "sentry-ruby", "~> 7.0"
-gem "sentry-rails", "~> 7.0"
+gem "sentry-rails", "~> 7.1"
 gem "sentry-opentelemetry", "~> 7.0"
 # Tracing itself is OpenTelemetry; spans are built from RubyLLM's instrumentation events
 gem "opentelemetry-sdk", "~> 1.13"
