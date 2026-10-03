@@ -52,7 +52,7 @@ gem "sentry-rails", "~> 7.0"
 gem "sentry-opentelemetry", "~> 7.0"
 # Tracing itself is OpenTelemetry; spans are built from RubyLLM's instrumentation events
 gem "opentelemetry-sdk", "~> 1.13"
-gem "opentelemetry-exporter-otlp", "~> 0.36"
+gem "opentelemetry-exporter-otlp", "~> 0.37"
 
 group :development, :test do
   # Load provider API keys from .env [https://github.com/bkeepers/dotenv]
