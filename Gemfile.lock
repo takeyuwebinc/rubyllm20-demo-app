@@ -399,13 +399,13 @@ GEM
       rexml (~> 3.2, >= 3.2.5)
       rubyzip (>= 1.2.2, < 4.0)
       websocket (~> 1.0)
-    sentry-opentelemetry (7.0.0)
+    sentry-opentelemetry (7.1.0)
       opentelemetry-sdk (~> 1.0)
-      sentry-ruby (~> 7.0.0)
-    sentry-rails (7.0.0)
+      sentry-ruby (~> 7.1.0)
+    sentry-rails (7.1.0)
       railties (>= 5.2.0)
-      sentry-ruby (~> 7.0.0)
-    sentry-ruby (7.0.0)
+      sentry-ruby (~> 7.1.0)
+    sentry-ruby (7.1.0)
       bigdecimal
       concurrent-ruby (~> 1.0, >= 1.0.2)
       logger
@@ -513,7 +513,7 @@ DEPENDENCIES
   selenium-webdriver
   sentry-opentelemetry (~> 7.0)
   sentry-rails (~> 7.0)
-  sentry-ruby (~> 7.0)
+  sentry-ruby (~> 7.1)
   solid_cable
   solid_cache
   solid_queue
@@ -661,9 +661,9 @@ CHECKSUMS
   schematist (1.1.0) sha256=905d8f0286830926e77e0d631bee325ee741c4b99640bc99735593b40ba73e7b
   securerandom (0.4.1) sha256=cc5193d414a4341b6e225f0cb4446aceca8e50d5e1888743fac16987638ea0b1
   selenium-webdriver (4.49.0) sha256=b430f091a3cababb356b6f6132e0e4f385b017819355f563557e1537819edc89
-  sentry-opentelemetry (7.0.0) sha256=8ebb93f136d0559f401f38103ab14364d0e7438ff3866d2a68287f635fda2f7f
-  sentry-rails (7.0.0) sha256=6ac6a010e088632e46710ce42db75aa5281a6b52a547efee10568cc2ed80605a
-  sentry-ruby (7.0.0) sha256=e9616ff521355a983fad404ca575d8bb1f1949a8cac42a7a893dd02156bcdb1a
+  sentry-opentelemetry (7.1.0) sha256=4c3c599c6c2ce0ef6ccad9f4436158fdee6db3eadc1505da6a8f509bfdbde8c1
+  sentry-rails (7.1.0) sha256=21e2092f8ab013ec384a4a3e406622a1c2a04d6638c697b8f922d9d46da634fa
+  sentry-ruby (7.1.0) sha256=bd6d2d022d879268526f62f0dccfb76aac99542bfce355e2b6a49cd1a81c0102
   signet (0.22.0) sha256=b76d495ccb07ad35dbc89f3e920665a9d8ed717141955034005d7843dcfe4780
   solid_cable (4.0.2) sha256=084636a67679ad00d23088b33c84047e614bcf41ee559db24b414d83cdc42d03
   solid_cache (1.0.10) sha256=bc05a2fb3ac78a6f43cbb5946679cf9db67dd30d22939ededc385cb93e120d41
