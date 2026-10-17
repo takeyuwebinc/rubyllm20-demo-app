@@ -42,7 +42,7 @@ gem "kamal", require: false
 gem "thruster", require: false
 
 # The subject of this demo app. Pinned: 2.0.0 was released on 2026-09-18 [https://rubyllm.com]
-gem "ruby_llm", "2.0.0"
+gem "ruby_llm", "2.1.1"
 # Required by RubyLLM for Vertex AI authentication (Deep Research demo)
 gem "googleauth", "~> 1.15"
 
